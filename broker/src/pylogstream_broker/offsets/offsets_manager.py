@@ -1,4 +1,4 @@
-from log_manager import read_message, append_message, RETENSION
+from pylogstream_broker.log.log_manager import read_message, append_message, RETENSION
 import time
 
 INTERNAL_CONSUMER_LOG = "__consumer_offset"

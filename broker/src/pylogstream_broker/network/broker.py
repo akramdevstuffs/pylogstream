@@ -2,10 +2,10 @@ import uuid
 import socket
 import asyncio
 import time
-from log_manager import append_message, start_threads,load_topics_log, check_message_available, get_latest_offset
-from offsets_manager import update_client_offset, get_client_offsets, load_client_offsets
+from pylogstream_broker.log.log_manager import append_message, start_threads,load_topics_log, check_message_available, get_latest_offset
+from pylogstream_broker.offsets.offsets_manager import update_client_offset, get_client_offsets, load_client_offsets
 from concurrent.futures import ThreadPoolExecutor
-from reader import ReaderThread, ReadRequest, ReadResult
+from pylogstream_broker.log.reader import ReaderThread, ReadRequest, ReadResult
 import os
 import queue
 from typing import Dict
@@ -265,5 +265,5 @@ async def start_server():
     async with server:
         await server.serve_forever()
 
-if __name__ == "__main__":
+def main():
     asyncio.run(start_server())

@@ -1,6 +1,8 @@
 logs
 venv
+.venv
 __pycache__
 .vscode
 test_minikafka_pickle.pkl
 **/__results/**
+*.egg-info

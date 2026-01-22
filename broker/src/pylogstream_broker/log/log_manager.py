@@ -6,8 +6,8 @@ import threading
 import platform
 import _io
 from dataclasses import dataclass
-from segment_cache import LRUCache
-from utility import set_sequential_hint, checksum_verify
+from pylogstream_broker.log.segment_cache import LRUCache
+from pylogstream_broker.utility.utility import set_sequential_hint, checksum_verify
 
 RETENSION = 60 # Seconds
 

@@ -11,7 +11,7 @@ import uuid
 # Apply monkey patch before import client so it will patch all blocking socket send and receive calls
 monkey.patch_all()
 
-from client.client import Client
+from pylogstream_client.client import Client
 
 # Modify fds and socket limits to handle multiple sockets
 import resource

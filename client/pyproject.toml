@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pylogstream-client"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "pylogstream-protocol>=0.1.0",
+    "gevent"
+]
+
+[project.optional-dependencies]
+gevent = [
+    "gevent"
+]
+
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+

@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Dict
 import asyncio
 from queue import SimpleQueue, Empty
-from log_manager import read_message
+from pylogstream_broker.log.log_manager import read_message
 
 @dataclass
 class ReadRequest:
