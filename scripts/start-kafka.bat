@@ -1,1 +1,0 @@
-rmdir /q /s logs && python src/PyLogStreams/broker.py
