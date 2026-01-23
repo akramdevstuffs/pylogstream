@@ -6,6 +6,7 @@ import threading
 import platform
 import _io
 from dataclasses import dataclass
+from typing import Dict, Iterator, List
 from pylogstream_broker.log.segment_cache import LRUCache
 from pylogstream_broker.utility.utility import set_sequential_hint, checksum_verify
 
@@ -15,20 +16,23 @@ GRACE_DELETION_TIME = 5 # Delete file after 5 seconds of being marked
 
 SEGMENT_SIZE = 10*1024*1024 # 10MB, split the segments at 10MB size
 
-SEG_SIZE_INC = 1024*1024 # 1MB, what which size he segments should increase
+SEG_SIZE_INC = 1024*1024 # 1MB, which size the segments should increase
 
 OLD_SEGMENT_CACHE_SIZE = 1000 # Number of old segments to keep in cache
 
 # Currently not used
 @dataclass
 class Segment:
-    f: object
-    mm: mmap.mmap
+    f: _io.BufferedRandom
+    mm: mmap.mmap|None
     create_time: float
     filesize: int
     write_offset: int
 
-topics_log_file = {} # (topic: [Segment, Segment1...], ...)
+    def __iter__(self) -> Iterator[_io.BufferedRandom,mmap.mmap|None,float,int,int]:
+        return iter((self.f,self.mm,self.create_time,self.filesize,self.write_offset))
+
+topics_log_file:Dict[str,List[Segment]] = {} # (topic: [Segment, Segment1...], ...)
 
 # release segment caches
 def on_segment_evicted(key, seg: Segment):
@@ -41,7 +45,7 @@ def on_segment_evicted(key, seg: Segment):
 segmentCache = LRUCache(OLD_SEGMENT_CACHE_SIZE, on_segment_evicted)
 
 # Only keeps the latest offset of active segment
-segments_write_offset = {} # ('files/topic/seg1.txt': 0230, ...)
+segments_write_offset:Dict[str,int] = {} # ('files/topic/seg1.txt': 0230, ...)
 
 delete_file_queue = queue.Queue() # FIFO thread safe queue for deleting the files
 
@@ -60,19 +64,19 @@ def load_topics_log():
     for topic in os.listdir(LOG_FILE_DIR):
         topic_dir = os.path.join(LOG_FILE_DIR,topic)
         segments = os.listdir(topic_dir)
-        files = []
+        files:List[Segment] = []
         for seg in segments[:-1]:
-            f = open(os.path.join(topic_dir,seg), 'r')
+            f = open(os.path.join(topic_dir,seg), 'r+b')
             st = os.stat(f.fileno())
             f.close()
-            files.append((f, None,get_file_birthtime(st), st.st_size, -1))
+            files.append(Segment(f, None,get_file_birthtime(st), st.st_size, -1))
         if len(segments) == 0:
             continue
         f = open(os.path.join(topic_dir, segments[-1]), 'r+b')
         st = os.stat(f.fileno())
         mm = mmap.mmap(f.fileno(),0)
         write_offset = get_write_offset(f,mm)
-        files.append((f, mm, get_file_birthtime(st), st.st_size, write_offset))
+        files.append(Segment(f, mm, get_file_birthtime(st), st.st_size, write_offset))
         topics_log_file[topic] = files
 
 def get_write_offset(f, mm):
@@ -86,7 +90,7 @@ def get_write_offset(f, mm):
         write_offset += 4+msg_len
     return write_offset
 
-def get_topic_log(topic, offset=-1):
+def get_topic_log(topic, offset=-1)->Segment:
     # Return the segment with offset and also it's index
     # offset=-1 returns the active segment
     if topic not in topics_log_file:
@@ -100,32 +104,32 @@ def get_topic_log(topic, offset=-1):
     if offset!=-1:
         while l <= r:
             mid = l + (r-l)//2
-            if (get_offset_from_filename(topics_list[mid][0].name) <= offset):
+            if (get_offset_from_filename(topics_list[mid].f.name) <= offset):
                 index = mid
                 l = mid + 1
             else:
                 r = mid-1
-    __segment = topics_list[index]
+    __segment:Segment = topics_list[index]
     # It's old segment
     # Get the cached segment
-    if __segment[1] is None:
-        cache_key = __segment[0].name
+    if __segment.mm is None:
+        cache_key = __segment.f.name
         cached_segment = segmentCache.get(cache_key)
         if cached_segment:
             # we don't need to save it in topics_log_file because it will contain f,mm as None because it's old segment
-            return (cached_segment.f, cached_segment.mm, __segment[2], __segment[3], __segment[4], index)
+            return Segment(cached_segment.f, cached_segment.mm, __segment.create_time, __segment.filesize, __segment.write_offset)
         else:
             # Load from file
-            filename = __segment[0].name
+            filename = __segment.f.name
             f = open(filename, 'r+b')
             mm = mmap.mmap(f.fileno(), 0)
             # Save to cache
-            segmentCache.put(cache_key, Segment(f, mm, __segment[2], __segment[3], __segment[4]))
-            return (f, mm, __segment[2], __segment[3], __segment[4], index)
+            segmentCache.put(cache_key, Segment(f, mm, __segment.create_time, __segment.filesize, __segment.write_offset))
+            return Segment(f, mm, __segment.create_time, __segment.filesize, __segment.write_offset)
 
-    return __segment + (index,) # Include index in return tuple
+    return __segment 
 
-def rollover_file(topic):
+def rollover_file(topic)->Segment:
     segment_list = []
     if topic in topics_log_file:
         segment_list = topics_log_file[topic]
@@ -135,18 +139,18 @@ def rollover_file(topic):
     if len(segment_list) > 0:
         active_seg = segment_list[-1]
     # Closing active segment if it's exists and opened
-    if (active_seg and active_seg[1] is not None):  # Checking if mmap is None
+    if (active_seg and active_seg.mm is not None):  # Checking if mmap is None
         """ Instead of closing it now, just put it in the cache it will get closed by itself when it will be not need.
             It will fix the race condition where the file that is in use got closed.
           """
         # active_seg[1].close()
         # active_seg[0].close()
-        segmentCache.put(active_seg[0].name, Segment(active_seg[0], active_seg[1], active_seg[2], active_seg[3], active_seg[4]))
-        topics_log_file[topic][-1] = (active_seg[0], None, active_seg[2], active_seg[3], active_seg[4])
+        segmentCache.put(active_seg.f.name, active_seg)
+        topics_log_file[topic][-1] = Segment(active_seg.f, None, active_seg.create_time, active_seg.filesize, active_seg.write_offset)
     start_offset = 0
     # If there's previous segment then updating new write offset
     if active_seg:
-        start_offset = active_seg[4]
+        start_offset = active_seg.write_offset # Assigining previous active_seg endpoint as the new starting point of new log
     filepath = os.path.join(LOG_FILE_DIR,topic,f"{str(start_offset)}_log.txt")
     #Create file if it doesn't exist
     if not os.path.exists(filepath):
@@ -156,7 +160,7 @@ def rollover_file(topic):
     # Hint to OS for sequential access
     mm = mmap.mmap(f.fileno(), 0)
     set_sequential_hint(mm,f.fileno())
-    __segment = (f,mm,time.time(), SEG_SIZE_INC, start_offset)
+    __segment = Segment(f,mm,time.time(), SEG_SIZE_INC, start_offset)
     new_segment_list = topics_log_file[topic] + [__segment]
     # Reference swap with new list
     topics_log_file[topic] = new_segment_list
@@ -177,7 +181,7 @@ def append_message(topic, msg_bytes, hash=None) -> int: # Result code
         msg_bytes += hash
 
     # We are ignoring index because list size can change while appending the message
-    f,mm,create_time,filesize,write_offset, _ = get_topic_log(topic)
+    f,mm,create_time,filesize,write_offset = get_topic_log(topic)
     file_start_offset = get_offset_from_filename(f.name)
     file_write_offset = write_offset-file_start_offset
     msg_len = len(msg_bytes)
