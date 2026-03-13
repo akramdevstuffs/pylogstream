@@ -1,3 +1,9 @@
+### TODO: This file uses previous api and log_manager, add the offset reterival logic here and provide right api calls
+### Currently it's not function
+
+
+# Old implementation
+"""
 from pylogstream_broker.log.log_manager import read_message, append_message, RETENSION
 import time
 
@@ -44,3 +50,4 @@ def update_client_offset(id: str, topic: str, offset: int):
         client_offsets[id] = {}
     client_offsets[id][topic] = offset
     append_message(INTERNAL_CONSUMER_LOG, f"{int(time.time()*1000)} {id} {topic} {offset}".encode())
+"""

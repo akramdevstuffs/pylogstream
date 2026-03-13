@@ -1,0 +1,23 @@
+broker:
+  host: "127.0.0.1"
+  port: 9092
+  checksum_enable: true
+  offset_topic: "__consumer_offset"
+
+  writer_config:
+    max_batch_size:  64
+    max_batch_bytes: 1048576     # 1024*1024 bytes
+    max_batch_wait: 0.002
+    max_workers: 4
+
+log:
+  log_dir: "./data/logs"
+  retension_ms: 604800000        # 7 days
+  rollover_ms: 3600000           # 1 hour
+  max_segment_size: 134217728    # 128MB
+  init_segment_size: 16777216    # 16MB
+  segment_size_inc: 16777216     # 16MB growth
+  segment_cache_size: 100
+
+  cleaner_service_interval: 2.0
+  flush_service_interval: 2.0

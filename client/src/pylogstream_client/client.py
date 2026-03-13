@@ -1,3 +1,5 @@
+# TODO: Update the client module for new protcols
+
 import socket
 import zlib
 import os
