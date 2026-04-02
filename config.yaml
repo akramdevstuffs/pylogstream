@@ -3,6 +3,8 @@ broker:
   port: 9092
   checksum_enable: true
   offset_topic: "__consumer_offset"
+  controller_host: "127.0.0.1"
+  controller_port: 9093
 
   writer_config:
     max_batch_size:  64
@@ -21,3 +23,10 @@ log:
 
   cleaner_service_interval: 2.0
   flush_service_interval: 2.0
+
+replica:
+  id: "1"
+  fetch_size: 1048576
+  pool_wait: 1
+  min_isr_count: 1
+  max_isr_lag_ms: 10000

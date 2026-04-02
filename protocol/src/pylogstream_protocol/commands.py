@@ -17,6 +17,7 @@ class ClientIdCommand(Command):
 class PublishCommand(Command):
     topic: str
     payload: bytes
+    acks: int  # allowed values -1, 0, 1
     contains_checksum: bool
 
 @dataclass
@@ -38,8 +39,20 @@ class SubscribeCommand(Command):
 class CommitOffsetCommand(Command):
     topic: str
     offset: int
+    acks: int # -1, 0, 1
 
 
 @dataclass
 class PingCommand(Command):
     pass
+
+@dataclass
+class ReplicaCommand(Command):
+    # Just a class for type hinting
+    topic: str
+
+@dataclass 
+class ReplicaFetchCommand(ReplicaCommand):
+    offset: int
+    size: int
+    replica_id: str

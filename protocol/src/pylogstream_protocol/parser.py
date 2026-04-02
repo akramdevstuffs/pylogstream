@@ -20,8 +20,13 @@ def parse_command(data: bytes, checksum_enable=False):
     
     if cmd == "CMT":
         msg =data.decode()
-        parts = msg.split(" ", 2)
-        return CommitOffsetCommand(parts[1], int(parts[2]))
+        parts = msg.split(" ", 3)
+        # Wire format: CMT {topic} {acks} {offset}
+        # CommitOffsetCommand dataclass: (topic: str, offset: int, acks: int)
+        acks = parts[2]
+        if not acks in {'-1', '0', '1'}:
+            raise ValueError("Invalid acks parameter")
+        return CommitOffsetCommand(parts[1], int(parts[3]), int(acks))
     
     if cmd=="FCH":
         msg = data.decode()
@@ -30,16 +35,20 @@ def parse_command(data: bytes, checksum_enable=False):
     
     if cmd=='PUB':
         msg = data.decode()
-        parts = msg.split(" ", 2)
+        parts = msg.split(" ", 3)
         topic = parts[1]
-        payload = parts[2]
+        acks = parts[2]
+        # Validate acks that it's in range
+        if not acks in {'-1','0','1'}:
+            raise ValueError("Invalid acks parameter")
+        payload = parts[3]
         if checksum_enable:
             payload_parts = payload.split(" ",1)
             hash = int(payload_parts[0])
             msg = payload_parts[1].encode()
             if not checksum_verify(msg, hash):
                 raise ChecksumFailed(msg, hash)
-        return PublishCommand(topic, payload.encode(), checksum_enable)
+        return PublishCommand(topic, payload.encode(), int(acks),checksum_enable)
 
     if cmd=="PUL":
         msg = data.decode()
@@ -48,6 +57,15 @@ def parse_command(data: bytes, checksum_enable=False):
         offset = parts[2]
         size = parts[3]
         return PullCommand(topic, int(offset), int(size))
+    
+    if cmd=="RFH":
+        msg = data.decode()
+        parts = msg.split(" ", 3)
+        replica_id = parts[1]
+        topic = parts[2]
+        offset = parts[3]
+        size = parts[4]
+        return ReplicaFetchCommand(topic, int(offset), int(size), replica_id)
 
     if cmd=='PNG':
         return PingCommand()
@@ -67,12 +85,22 @@ def parse_response(data: bytes):
         return PingResponse()
 
     if cmd == "ACK":
-        parts = msg.split(" ", 2)
-        return PubAckResponse(parts[1], int(parts[2]))
+        parts = msg.split(" ", 3)
+        # Wire format: ACK {topic} {acks} {offset}
+        # PubAckResponse dataclass: (topic: str, offset: int, acks: int)
+        acks = parts[2]
+        if not acks in {'-1', '0', '1'}:
+            raise ValueError("Invalid acks parameter in ACK response")
+        return PubAckResponse(parts[1], int(parts[3]), int(acks))
 
     if cmd == "OAK":
-        parts = msg.split(" ", 2)
-        return OffsetAckResponse(parts[1], int(parts[2]))
+        parts = msg.split(" ", 3)
+        # Wire format: OAK {topic} {acks} {offset}
+        # OffsetAckResponse dataclass: (topic: str, offset: int, acks: int)
+        acks = parts[2]
+        if not acks in {'-1', '0', '1'}:
+            raise ValueError("Invalid acks parameter in OAK response")
+        return OffsetAckResponse(parts[1], int(parts[3]), int(acks))
 
     if cmd == "ERR":
         parts = msg.split(" ", 2)
@@ -85,6 +113,14 @@ def parse_response(data: bytes):
         payload_len = int(parts[2])
 
         return MessageResponseHeader(topic, payload_len)
+    
+    if cmd == "RFH":
+        parts = msg.split(" ", 4)
+        topic = parts[1]
+        log_end_offset = int(parts[2])
+        high_watermark = int(parts[3])
+        payload_len = int(parts[4])
+        return ReplicaFetchHeaderResponse(topic, log_end_offset, high_watermark, payload_len)
 
     raise UnknownCommand(cmd)
 

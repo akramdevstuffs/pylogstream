@@ -15,7 +15,7 @@ class WriteRequest:
     topic: str
     data: bytes
     created_at: float
-    callback: asyncio.Future
+    callback: asyncio.Future|None = None
 
 class Writer:
     def __init__(
@@ -26,26 +26,42 @@ class Writer:
         self.__log_manager = log_manager
         self.config = config
         self.topic_queue: Dict[str, asyncio.Queue[WriteRequest]] = dict()
+        self.topic_task: Dict[str, asyncio.Task] = dict()
+
+        self.running = True
 
         self.executor = ThreadPoolExecutor(max_workers=config.max_workers)
     
     def submit(self, req: WriteRequest):
         # Submit the write request
         # Starts the collector coroutine if not active
-        if req.topic not in self.topic_queue:
-            self.topic_queue[req.topic] = asyncio.Queue()
-            asyncio.create_task(self.topic_collector(req.topic))
+        if req.topic not in self.topic_task:
+            if req.topic not in self.topic_queue:
+                self.topic_queue[req.topic] = asyncio.Queue()
+            self.topic_task[req.topic] = asyncio.create_task(self._topic_collector(req.topic))
 
         self.topic_queue[req.topic].put_nowait(req)
+    
+    async def close(self):
+        self.running = False
+        for topic, task in self.topic_task.items():
+            task.cancel()
+        for topic, q in self.topic_queue.items():
+            # Drain the queue and set exception for pending requests
+            while not q.empty():
+                req = await q.get()
+                if req.callback:
+                    req.callback.set_exception(Exception("Writer is closing"))
+        self.executor.shutdown(wait=True)
 
-    async def topic_collector(self, topic: str):
+    async def _topic_collector(self, topic: str):
         q: asyncio.Queue[WriteRequest] = self.topic_queue[topic]
 
         batch: list[WriteRequest] = []
         batch_bytes = 0
         start_time: float | None = None
 
-        while True:
+        while self.running:
 
             # wait for first element if batch empty
             if not batch:
@@ -85,7 +101,12 @@ class Writer:
     
     def _flush_batch(self, topic, batch: list[WriteRequest]):
         data: list[bytes] = list(map(lambda req: req.data, batch))
-        offsets = self.__log_manager.writer.write_batch(topic, data)
+        offsets = self.__log_manager.append_batch(topic, data)
         for offset,req in zip(offsets, batch):
-            req.callback.set_result(offset)
-            req.callback.done()
+            if(req.callback is None):
+                continue
+            loop = req.callback._loop
+            loop.call_soon_threadsafe(
+            req.callback.set_result,
+            offset
+            )

@@ -24,14 +24,25 @@ class WriterConfig:
 class BrokerConfig:
     host: str
     port: int
+    controller_host: str
+    controller_port: int
     checksum_enable: bool
     writer_config: WriterConfig
     offset_topic: str  = "__consumer_offset"
 
 @dataclass(frozen=True)
+class ReplicaConfig:
+    id: str
+    fetch_size: int = 1024*1024
+    pool_wait:int = 1
+    min_isr_count: int = 2
+    max_isr_lag_ms: int = 10000
+
+@dataclass(frozen=True)
 class Config:
     broker: BrokerConfig
     log: LogConfig
+    replica: ReplicaConfig
 
 def load_config(path: str) -> Config:
     with open(path) as f:
@@ -45,7 +56,10 @@ def load_config(path: str) -> Config:
             port=broker_data["port"],
             checksum_enable=broker_data["checksum_enable"],
             offset_topic=broker_data.get("offset_topic", "__consumer_offset"),
-            writer_config=WriterConfig(**broker_data["writer_config"])
+            writer_config=WriterConfig(**broker_data["writer_config"]),
+            controller_host=broker_data["controller_host"],
+            controller_port=broker_data["controller_port"]
         ),
-        log=LogConfig(**data["log"])
+        log=LogConfig(**data["log"]),
+        replica=ReplicaConfig(**data["replica"])
     )

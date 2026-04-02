@@ -63,6 +63,7 @@ async def main():
         PublishCommand(
             topic="test-topic",
             payload=payload,
+            acks=-1,
             contains_checksum=True
         )
     )
@@ -78,7 +79,8 @@ async def main():
         writer,
         CommitOffsetCommand(
             topic="test-topic",
-            offset=offset
+            offset=offset,
+            acks=1
         )
     )
 
@@ -94,9 +96,6 @@ async def main():
 
     writer.close()
     await writer.wait_closed()
-
-    
-
 
 if __name__ == "__main__":
     asyncio.run(main())

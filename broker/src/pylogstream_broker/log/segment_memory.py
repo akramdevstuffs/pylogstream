@@ -82,11 +82,12 @@ class Entry:
                     self.__file_obj.truncate(self.init_segment_size)
                     self.__capacity = self.init_segment_size
 
-                # Hint the os for sequential reads
-                set_sequential_hint(self.__mmap, self.__file_obj.fileno())
 
                 self.__mmap = mmap.mmap(self.__file_obj.fileno(), 0)
                 self.__mv = memoryview(self.__mmap)
+
+                # Hint the os for sequential reads
+                set_sequential_hint(self.__mmap, self.__file_obj.fileno())
     
     def read(self, offset: int, length: int) -> memoryview:
         assert(self.__mmap is not None)
@@ -102,8 +103,9 @@ class Entry:
         assert(self.__mmap is not None)
         assert(self.__mutable == True)
         required_capacity = offset+len(msg)
-        self._ensure_capacity_locked(required_capacity)
-        self.__mmap[offset:required_capacity] = msg
+        with self._lock:
+            self._ensure_capacity_locked(required_capacity)
+            self.__mmap[offset:required_capacity] = msg
     
     def release(self) -> None:
         # Not thread-safe
