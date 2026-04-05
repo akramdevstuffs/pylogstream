@@ -4,7 +4,7 @@ from pylogstream_broker.log.segment_memory import SegmentMemory
 from pylogstream_broker.log.segment_registry import SegmentRegistry
 from pylogstream_broker.log.log_reader import LogReader
 from pylogstream_broker.log.log_writer import LogWriter
-from pylogstream_broker.log.error import TopicDoesntExists
+from pylogstream_broker.log.error import TopicDoesntExistsError
 
 class LogManager:
     def __init__(self, config: LogConfig):
@@ -24,7 +24,7 @@ class LogManager:
         try:
             # Check if topic already exists
             self._registry.get_segment(topic)
-        except TopicDoesntExists:
+        except TopicDoesntExistsError:
             # Topic doesn't exists, create a new one
             self._registry.create_segment(topic, 0)
 

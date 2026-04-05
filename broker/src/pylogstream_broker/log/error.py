@@ -6,7 +6,7 @@ class LogError(Exception):
 class LogStateError(LogError):
     pass
 
-class TopicDoesntExists(LogError):
+class TopicDoesntExistsError(LogError):
     def __init__(self, topic:str):
         super().__init__(
             f"Topic doesn't exists {topic}"

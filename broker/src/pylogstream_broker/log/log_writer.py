@@ -1,6 +1,6 @@
 from pylogstream_broker.log.segment_registry import SegmentRegistry, SegmentMeta, SegmentState
 from pylogstream_broker.log.segment_memory import SegmentMemory
-from pylogstream_broker.log.error import TopicDoesntExists
+from pylogstream_broker.log.error import TopicDoesntExistsError
 from pylogstream_broker.log.segment_policy import SegmentPolicy
 from collections import defaultdict
 import threading
@@ -38,16 +38,17 @@ class LogWriter:
         with lock:
             try:
                 meta = self.__registry.get_segment(topic)
-            except TopicDoesntExists:
+            except TopicDoesntExistsError:
                 meta = self.__registry.create_segment(topic, 0)
             required_size:int = 4 + len(data)
             msg = len(data).to_bytes(4, 'big') + data
             if(self.__policy.should_rollover(meta, required_size) and meta.size != 0):
                 meta = self._rollover(topic)
+            write_offset = meta.get_end_offset()
             with self.__memory.acquire(meta) as handle:
-                handle.write(meta.size, msg)
+                handle.write(meta.get_file_end_offset(), msg)
             self.__registry.advance_offset(meta, len(msg))
-            return meta.write_offset
+            return write_offset
     
     def write_batch(self, topic: str, batch: list[bytes]):
         offsets = []
@@ -65,8 +66,8 @@ class LogWriter:
         try:
             meta = self.__registry.get_segment(topic)
             self.__registry.progress_state(meta, SegmentState.SEALED)
-            base_offset = meta.base_offset + meta.size
-        except TopicDoesntExists:
+            base_offset = meta.get_end_offset()
+        except TopicDoesntExistsError:
             pass
         meta = self.__registry.create_segment(topic, base_offset)
         return meta
