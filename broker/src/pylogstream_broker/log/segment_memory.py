@@ -53,7 +53,6 @@ class Entry:
 
     def __init__(self, meta:SegmentMeta, init_segment_size, segment_size_inc) -> None:
         self.__mmap: mmap.mmap | None = None
-        self.__mv: memoryview | None = None
         self.__file_obj: _io.BufferedRandom | None = None
         self.__capacity: int|None = None
         self.__filepath = meta.get_filepath()
@@ -84,15 +83,9 @@ class Entry:
 
 
                 self.__mmap = mmap.mmap(self.__file_obj.fileno(), 0)
-                self.__mv = memoryview(self.__mmap)
 
                 # Hint the os for sequential reads
                 set_sequential_hint(self.__mmap, self.__file_obj.fileno())
-    
-    def read(self, offset: int, length: int) -> memoryview:
-        assert(self.__mmap is not None)
-        assert(self.__mv is not None)
-        return self.__mv[offset: offset:length]
 
     def read_bytes(self, offset: int, length: int) -> bytes:
         assert(self.__mmap is not None)
@@ -131,7 +124,6 @@ class Entry:
             new_capacity = max(capacity, self.segment_size_inc+self.__capacity)
             self.__file_obj.truncate(new_capacity)
             self.__mmap.resize(new_capacity)
-            self.__mv = memoryview(self.__mmap)
 
             self.__capacity = new_capacity
 
@@ -146,10 +138,6 @@ class SegmentHandle:
     
     def __enter__(self):
         return self
-
-    
-    def read(self, offset:int, length: int) -> memoryview:
-        return self.__entry.read(offset, length)
     
     def read_bytes(self, offset:int, length: int) -> bytes:
         return self.__entry.read_bytes(offset, length)
