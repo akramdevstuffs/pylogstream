@@ -193,22 +193,15 @@ class Broker:
             resp = MessageResponse(cmd.topic, res.data)
             await self._send_response(resp,writer)
         else:
-            with  self.log_manager.read(cmd.topic, cmd.offset, cmd.size) as res:
-                ## Note: memoryview only valid till res is in scope
+            with self.log_manager.read(cmd.topic, cmd.offset, cmd.size) as res:
                 
                 # Prioritise sendfile method
-                if(res.file_slice is not None):
-                    resp = FileResponse(
-                        cmd.topic, 
-                        res.file_slice.filepath, 
-                        res.file_slice.offset, 
-                        res.file_slice.batch_size
-                    )
-                else:
-                    resp = MmapResponse(
-                        cmd.topic,
-                        res.result
-                    )
+                resp = FileResponse(
+                    cmd.topic, 
+                    res.file_slice.filepath, 
+                    res.file_slice.offset, 
+                    res.file_slice.batch_size
+                )
                 await self._send_response(resp,writer)
 
         

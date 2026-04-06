@@ -81,8 +81,7 @@ class ReplicaLeader:
                 res.data
                 )
         else:
-            res = self.log_manager.read(cmd.topic, cmd.offset, cmd.size)
-            if(res.file_slice is not None):
+            with self.log_manager.read(cmd.topic, cmd.offset, cmd.size) as res:
                 return ReplicaFetchFileResponse(
                     cmd.topic, 
                     log_end_offset,
@@ -91,18 +90,6 @@ class ReplicaLeader:
                     res.file_slice.filepath, 
                     res.file_slice.offset, 
                     res.file_slice.batch_size
-                )
-            # TODO: Implement send by memoryview and design clean owner ship of who will free it
-            else:
-                # Temporary fallback: copy from mmap into bytes
-                data = bytes(res.result)
-
-                return ReplicaFetchBytesResponse(
-                    cmd.topic,
-                    log_end_offset,
-                    high_watermark,
-                    len(data),
-                    data
                 )
         
     async def wait_for_hw(self, offset:int):
