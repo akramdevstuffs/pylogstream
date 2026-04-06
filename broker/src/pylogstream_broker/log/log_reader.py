@@ -12,10 +12,9 @@ class FileSlice:
 
 @dataclass
 class ReadResult:
-    result: memoryview
     next_offset:int
     high_watermark:int
-    file_slice: FileSlice|None
+    file_slice: FileSlice
     _release: Callable[[],None]
     def __enter__(self):
         return self
@@ -43,10 +42,35 @@ class LogReader:
         max_batch_size = min(size, meta.size - segment_offset)
         handle = self._memory.acquire(meta)
         
-        # Count the message length
+        batch_size = self._calc_read_size(handle, segment_offset, max_batch_size)
+
+        next_offset = offset + batch_size
+        max_offset = self._registry.get_latest_offset(topic)
+        file_slice = FileSlice(
+                filepath=filepath,
+                offset=segment_offset,
+                batch_size = batch_size
+        )
+        result = ReadResult(next_offset, max_offset, file_slice,handle.release)
+        return result
+    
+    def read_bytes(self, topic:str, offset:int, size:int):
+        """A thread-safe function that provides bytes for each read request"""
+        meta = self._registry.get_segment(topic, offset)
+        segment_offset = offset - meta.base_offset
+        max_batch_size = min(size, meta.size - segment_offset)
+
+        with self._memory.acquire(meta) as handle:
+            batch_size = self._calc_read_size(handle, segment_offset, max_batch_size)
+            data = handle.read_bytes(segment_offset, batch_size)
+        next_offset = offset + batch_size
+        max_offset = self._registry.get_latest_offset(topic)
+        return ReadResultBytes(data, next_offset, max_offset)
+    
+    def _calc_read_size(self, handle: SegmentHandle, offset: int, max_batch_size: int) -> int:
         batch_size = 0
         roffset = offset
-        while roffset < segment_offset + max_batch_size:
+        while roffset < offset + max_batch_size:
             sz = int.from_bytes(handle.read_bytes(roffset, 4))
             if(batch_size + sz + 4 <= max_batch_size):
                 batch_size += sz+4
@@ -55,20 +79,4 @@ class LogReader:
         # Atleast include 1 message
         if batch_size == 0:
             batch_size = int.from_bytes(handle.read_bytes(offset, 4)) + 4
-
-        mv: memoryview = handle.read(segment_offset, batch_size)
-        next_offset = offset + len(mv)
-        max_offset = self._registry.get_latest_offset(topic)
-        file_slice = FileSlice(
-                filepath=filepath,
-                offset=segment_offset,
-                batch_size = batch_size
-        )
-        result = ReadResult(mv, next_offset, max_offset, file_slice,handle.release)
-        return result
-    
-    def read_bytes(self, topic:str, offset:int, size:int):
-        """A thread-safe function that provides bytes for each read request"""
-        with self.read(topic,offset, size) as result:
-            data:bytes = result.result[:]
-        return ReadResultBytes(data, result.next_offset, result.high_watermark)
+        return batch_size
