@@ -51,8 +51,20 @@ class Entry:
     Owned by SegmentMemory class, provides read and write guarantees.
     """
 
+    # Design note:
+    #
+    #   mmap read/write/resize in cpython internally uses locks
+    #   memoryview read/write are lock-free but not thread-safe
+    #   It uses mmap-backed file for storage
+    #   It also uses memoryview from the mmap internal buffer
+    #   Uses memoryview for read/write operations, which provides zero-copy access and lock free
+    #
+    #   Reference:
+    #   https://stackoverflow.com/questions/79920736/how-to-safely-remap-resize-mmap-in-python-while-other-threads-are-reading/79920809#79920809
+
     def __init__(self, meta:SegmentMeta, init_segment_size, segment_size_inc) -> None:
         self.__mmap: mmap.mmap | None = None
+        self.__mv: memoryview | None = None
         self.__file_obj: _io.BufferedRandom | None = None
         self.__capacity: int|None = None
         self.__filepath = meta.get_filepath()
@@ -83,25 +95,35 @@ class Entry:
 
 
                 self.__mmap = mmap.mmap(self.__file_obj.fileno(), 0)
+                self.__mv = memoryview(self.__mmap)
 
                 # Hint the os for sequential reads
                 set_sequential_hint(self.__mmap, self.__file_obj.fileno())
 
     def read_bytes(self, offset: int, length: int) -> bytes:
-        assert(self.__mmap is not None)
-        return self.__mmap[offset : offset+length]
+        assert(self.__mv is not None)
+        return self.__mv[offset : offset+length].tobytes()
 
     
     def write(self, offset: int, msg: bytes) -> None:
-        assert(self.__mmap is not None)
-        assert(self.__mutable == True)
+        assert(self.__mv is not None)
+        assert(self.__capacity is not None)
+
+        if not self.__mutable:
+            raise Exception("Segment is not mutable, can't write")
+
         required_capacity = offset+len(msg)
-        with self._lock:
-            self._ensure_capacity_locked(required_capacity)
-            self.__mmap[offset:required_capacity] = msg
+        # Check capacity lock free
+        if required_capacity > self.__capacity:
+            self._increase_capacity_locked(required_capacity)
+        self.__mv[offset:required_capacity] = msg
     
     def release(self) -> None:
         # Not thread-safe
+        if self.__mv is not None:
+            self.__mv.release()
+            self.__mv = None
+        
         if self.__mmap is not None:
             if self.__mutable:
                 self.__mmap.flush()
@@ -113,7 +135,7 @@ class Entry:
             self.__file_obj.close()
             self.__file_obj = None
 
-    def _ensure_capacity_locked(self, capacity: int):
+    def _increase_capacity_locked(self, capacity: int):
         """Internal function: Not thread safe """
 
         assert(self.__capacity is not None)
@@ -123,9 +145,20 @@ class Entry:
             # Increasing the segment size 
             new_capacity = max(capacity, self.segment_size_inc+self.__capacity)
             self.__file_obj.truncate(new_capacity)
-            self.__mmap.resize(new_capacity)
 
+            # We can't resize the mmap cause it memoryview have reference of it.
+            # Creating a new mmap and memoryview to swap it
+            new_mmap = mmap.mmap(self.__file_obj.fileno(), 0)
+
+            # Hint the os for sequential reads
+            set_sequential_hint(self.__mmap, self.__file_obj.fileno())
+
+            # Swap the memoryview
+            self.__mv = memoryview(new_mmap)
             self.__capacity = new_capacity
+            # Close the old mmap
+            self.__mmap.close()
+            self.__mmap = new_mmap
 
 class SegmentHandle:
     """A abstraction class that hides entry(class) method.
