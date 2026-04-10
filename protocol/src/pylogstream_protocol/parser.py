@@ -144,7 +144,7 @@ def decode_record(record: bytes) -> tuple[int,str]:
     checksum = int(parts[0])
     message = parts[1].decode() if len(parts) > 1 else ""
 
-    if not checksum_verify(message, checksum):
+    if not checksum_verify(parts[1], checksum):
         raise RuntimeError("Message integrity failed")
 
     return checksum, message
