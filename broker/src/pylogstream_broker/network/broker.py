@@ -1,5 +1,9 @@
 from pylogstream_broker.config import load_config, Config, BrokerConfig
 from pylogstream_broker.network.writer import Writer, WriteRequest
+from pylogstream_protocol.error import (
+    ChecksumFailed as ChecksumFailedError, 
+    UnknownCommand as UnknownCommandError
+)  
 from pylogstream_protocol.framer import PREFIX_SIZE, decode_length
 from pylogstream_protocol.commands import (
     RegisterCommand,
@@ -22,6 +26,7 @@ from pylogstream_protocol.response import (
     PingResponse,
     MessageResponse,
     FileResponse,
+    ErrorResponse,
     MmapResponse,
     ControllerResponse,
     TopicMetaDataListResponse,
@@ -37,6 +42,7 @@ import asyncio
 import socket
 import uuid
 import time
+import contextlib
 
 class Broker:
 
@@ -49,6 +55,9 @@ class Broker:
             log_manager=self.log_manager,
             config=self.config.replica
         )
+
+        self._client_tasks = set()
+
         self.running = False
     
     async def _handle_controller(self):
@@ -74,24 +83,50 @@ class Broker:
             await asyncio.sleep(5)
 
     async def handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+
+        self._client_tasks.add((asyncio.current_task(), writer))
+
         client_id = None
         sock = writer.get_extra_info("socket")
         if sock:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        while True:
+        while self.running:
             try:
-                prefix = await reader.readexactly(PREFIX_SIZE)
-                data = await reader.readexactly(decode_length(prefix))
+                prefix = await asyncio.wait_for(reader.readexactly(PREFIX_SIZE), timeout=30)
+                data = await asyncio.wait_for(reader.readexactly(decode_length(prefix)), timeout=5.0)
             except asyncio.exceptions.IncompleteReadError:
                 # TODO: Add proper cleanup here for client disconnection
-                return
-            command = parse_command(data, self.config.broker.checksum_enable)
+                # check if connection is alive
+                if not reader.at_eof():
+                    resp = ErrorResponse(code=408, message="Request timeout")
+                    await self._send_response(resp, writer)
+                break
+            except asyncio.exceptions.TimeoutError:
+                resp = ErrorResponse(code=408, message="Request timeout")
+                await self._send_response(resp, writer)
+                break
+            except ConnectionResetError:
+                break
+            except Exception as e:
+                print(f"Unexpected error: {e}")
+                break
+            try:
+                command = parse_command(data, self.config.broker.checksum_enable)
+            except ChecksumFailedError:
+                resp = ErrorResponse(code=400, message="Checksum failed")
+                await self._send_response(resp, writer)
+                break
+            except UnknownCommandError:
+                resp = ErrorResponse(code=400, message="Unknown command")
+                await self._send_response(resp, writer)
+                break
+
             if isinstance(command, ReplicaCommand):
                 try:
                     resp = self.__replica_manager.handle(command)
                 except Exception:
                     # TODO: Implement error catching and give them to client
-                    return
+                    break
                 if resp is not None:
                     await self._send_response(resp, writer)
             elif isinstance(command, RegisterCommand):
@@ -105,20 +140,31 @@ class Broker:
                 self.__client_heartbeats[client_id] = time.time()
             elif client_id is None:
                 # Client must register first
-                return
+                break
             elif isinstance(command, SubscribeCommand):
                 pass
             elif isinstance(command, PullCommand):
                 # Check if offset is below high watermark
                 # TODO: Add proper error handling here
-                leader = self.__replica_manager.get_leader(command.topic)
-                if leader is None:
-                    # TODO: Send proper error response to client
-                    return
+                try:
+                    leader = self.__replica_manager.get_leader(command.topic)
+                except Exception:
+                    # TODO: modify the get_leader method to raise specific exception
+                    err = ErrorResponse(code=400, message="Topic not found or not leader")
+                    await self._send_response(err, writer)
+                    continue
                 high_watermark = leader.get_high_watermark()
                 if command.offset > high_watermark:
                     # TODO: Add proper error handling here
-                    return
+                    err = ErrorResponse(code=400, message=f"Offset out of range. High watermark is {high_watermark}")
+                    await self._send_response(err, writer)
+                    continue
+                elif command.offset == high_watermark:
+                    # Send an empty response
+                    resp = MessageResponse(topic=command.topic, payload=b"")
+                    await self._send_response(resp, writer)
+                    continue
+
                 await self._push_message(command,writer)
             elif isinstance(command, FetchOffsetCommand):
                 # TODO: Add fetch offset logic
@@ -127,26 +173,29 @@ class Broker:
                 await self._send_response(resp,writer)
             # For setting offsets from clients side
             elif isinstance(command, CommitOffsetCommand):
-                fut = None
-                if command.acks != 0:
-                    fut = asyncio.get_running_loop().create_future()
                 payload = f"{time.time()} {client_id} {command.topic} {command.offset}".encode()
-                offset = await self._handle_write(client_id, command.topic, payload, command.acks)
-                if command.acks == 0 or offset is None:
-                    return
-                resp = OffsetAckResponse(command.topic, command.acks, offset)
+                log_offset = await self._handle_write(client_id, command.topic, payload, command.acks)
+
+                if command.acks == 0:
+                    continue
+                resp = OffsetAckResponse(topic=command.topic, acks=command.acks, offset=command.offset)
                 await self._send_response(resp,writer)
             elif isinstance(command, PublishCommand):
 
-                offset = await self._handle_write(
-                    client_id=client_id,
-                    topic=command.topic,
-                    payload=command.payload,
-                    acks=command.acks
-                )
+                try:
+                    offset = await self._handle_write(
+                        client_id=client_id,
+                        topic=command.topic,
+                        payload=command.payload,
+                        acks=command.acks
+                    )
+                except ValueError:
+                    err = ErrorResponse(code=400, message="Topic not found or not leader")
+                    await self._send_response(err, writer)
+                    continue
                 if command.acks == 0 or offset is None:
-                    return
-                resp = PubAckResponse(command.topic, command.acks, offset)
+                    continue
+                resp = PubAckResponse(topic=command.topic, offset=offset,acks=command.acks)
                 await self._send_response(resp,writer)
             # Heart beat from client
             elif isinstance(command, PingCommand):
@@ -155,6 +204,15 @@ class Broker:
                 self.__client_heartbeats[client_id] = time.time()
                 resp = PingResponse()
                 await self._send_response(resp,writer)
+            
+            else:
+                # TODO: Handle unimplemented command
+                err = ErrorResponse(code=403, message="Unimplemented command")
+                await self._send_response(err, writer)
+
+        self._client_tasks.discard((asyncio.current_task(), writer))
+        writer.close()
+        await writer.wait_closed()
     
     async def _handle_write(self, 
                             client_id: str,
@@ -162,6 +220,13 @@ class Broker:
                             payload: bytes,
                             acks: int
                             ):
+
+        try:
+            leader = self.__replica_manager.get_leader(topic)
+        except Exception as e:
+            # TODO: modify the get_leader method to raise specific exception
+            raise ValueError(f"Topic doesn't found")
+
         fut = None
 
         # Create future only if we need it
@@ -181,7 +246,6 @@ class Broker:
         offset = fut.result()
         if acks == -1:
             # Wait for the offset to be replicated to all in-sync replicas
-            leader = self.__replica_manager.get_leader(topic)
             if leader is not None:
                 await leader.wait_for_hw(offset)
         return offset
@@ -218,9 +282,10 @@ class Broker:
         if frame.file_path:
             assert frame.offset is not None
             assert frame.length is not None
-            # Get the underlying fd of the socket
+
             with open(frame.file_path, "rb") as f:
                 await asyncio.get_running_loop().sendfile(writer.transport, f, frame.offset, frame.length)
+
         await writer.drain()
 
     async def start_server(self):
@@ -228,23 +293,39 @@ class Broker:
         self.running = True
         self.controller_task = asyncio.create_task(self._handle_controller())
 
-        server = await asyncio.start_server(
+        self.server = await asyncio.start_server(
             self.handle_client,
             self.config.broker.host,
             self.config.broker.port
         )
-        for sock in server.sockets:
+        for sock in self.server.sockets:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        addrs = ', '.join(str(sock.getsockname()) for sock in server.sockets)
+        addrs = ', '.join(str(sock.getsockname()) for sock in self.server.sockets)
         print(f'Serving on {addrs}')
 
-        async with server:
-            await server.serve_forever()
+        try:
+            await self.server.serve_forever()
+        except asyncio.CancelledError:
+            # Excpected during shutdown
+            pass
     
     async def close(self) -> None:
         self.running = False
         self.controller_task.cancel()
-        await self.controller_task
+        with contextlib.suppress(asyncio.CancelledError):
+            await self.controller_task
+
+        self.server.close()
+
+        for (task,writer) in self._client_tasks:
+            writer.close()
+            task.cancel()
+        
+        for (task,_) in self._client_tasks:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        await self.server.wait_closed()
         await self.writer.close()
         await self.__replica_manager.close_all()
 
