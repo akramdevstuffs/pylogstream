@@ -60,7 +60,7 @@ def parse_command(data: bytes, checksum_enable=False):
     
     if cmd=="RFH":
         msg = data.decode()
-        parts = msg.split(" ", 3)
+        parts = msg.split(" ", 4)
         replica_id = parts[1]
         topic = parts[2]
         offset = parts[3]
@@ -99,8 +99,14 @@ def parse_response(data: bytes):
         # OffsetAckResponse dataclass: (topic: str, offset: int, acks: int)
         acks = parts[2]
         if not acks in {'-1', '0', '1'}:
-            raise ValueError("Invalid acks parameter in OAK response")
+            raise ValueError(f"Invalid acks parameter in OAK response {msg}")
         return OffsetAckResponse(parts[1], int(parts[3]), int(acks))
+    
+    if cmd=="FCR":
+        parts = msg.split(" ", 2)
+        topic = parts[1]
+        offset = int(parts[2])
+        return FetchOffsetResponse(topic, offset)
 
     if cmd == "ERR":
         parts = msg.split(" ", 2)
@@ -114,7 +120,7 @@ def parse_response(data: bytes):
 
         return MessageResponseHeader(topic, payload_len)
     
-    if cmd == "RFH":
+    if cmd == "RPL":
         parts = msg.split(" ", 4)
         topic = parts[1]
         log_end_offset = int(parts[2])

@@ -34,6 +34,13 @@ def encode_response(resp):
             header = encode_frame(header),
             payload=None
         )
+    
+    if isinstance(resp, FetchOffsetResponse):
+        header = f"FCR {resp.topic} {resp.offset}".encode()
+        return EncodedFrame(
+            header = encode_frame(header),
+            payload=None
+        )
 
     if isinstance(resp, PubAckResponse):
 
@@ -176,6 +183,13 @@ def encode_command(cmd: Command, checksum_enable: bool = True):
 
     if isinstance(cmd, PingCommand):
         header = b"PNG"
+        return EncodedFrame(
+            header=encode_frame(header),
+            payload=None
+        )
+    
+    if isinstance(cmd, ReplicaFetchCommand):
+        header = f"RFH {cmd.replica_id} {cmd.topic} {cmd.offset} {cmd.size}".encode()
         return EncodedFrame(
             header=encode_frame(header),
             payload=None
