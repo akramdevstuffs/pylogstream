@@ -94,7 +94,19 @@ class TopicMetaDataResponse(ControllerResponse):
     leader_port: int
     replica_list: list[str]
     version: int   # Epoch version of coordinator, helps to prevent node holding old-version
+    state: str = "running"
+
+@dataclass(frozen=True)
+class TopicMetaDataListHeaderResponse(ControllerResponse):
+    payload_length: int
+
 
 @dataclass(frozen=True)
 class TopicMetaDataListResponse(ControllerResponse):
     meta_list: list[TopicMetaDataResponse]
+
+
+
+@dataclass(frozen=True)
+class ControllerPingResponse(ControllerResponse):
+    pass

@@ -1,3 +1,4 @@
+from pylogstream_protocol.parser import parse_response
 from pylogstream_broker.config import load_config, Config, BrokerConfig
 from pylogstream_broker.network.writer import Writer, WriteRequest
 from pylogstream_protocol.error import (
@@ -15,7 +16,9 @@ from pylogstream_protocol.commands import (
     PublishCommand,
     PingCommand,
     ReplicaCommand,
-    ReplicaFetchCommand
+    ReplicaFetchCommand,
+    BrokerRegisterCommand,
+    ControllerPingCommand,
 )
 from pylogstream_protocol.response import (
     Response,
@@ -31,9 +34,11 @@ from pylogstream_protocol.response import (
     ControllerResponse,
     TopicMetaDataListResponse,
     TopicMetaDataResponse,
+    TopicMetaDataListHeaderResponse,
+    ControllerPingResponse,
 )
-from pylogstream_protocol.encoder import encode_response, EncodedFrame
-from pylogstream_protocol.parser import parse_command 
+from pylogstream_protocol.encoder import encode_response, encode_command, EncodedFrame
+from pylogstream_protocol.parser import parse_command, parse_metadata_list_payload 
 from pylogstream_broker.log.log_manager import LogManager
 from pylogstream_broker.replication.manager import ReplicaManager
 from typing import Dict
@@ -56,31 +61,79 @@ class Broker:
             config=self.config.replica
         )
 
+        self.controller_connected: bool = False
+
         self._client_tasks = set()
 
         self.running = False
     
     async def _handle_controller(self):
-        # WIP: This is a placeholder for the controller communication logic. 
-        # The broker will maintain a persistent connection to the controller to receive metadata updates and other control messages. 
-        # The actual implementation will depend on the protocol defined for communication between the broker and the controller.
         controller_host = self.config.broker.controller_host
         controller_port = self.config.broker.controller_port
-        # TODO: Add retry logic with backoff here for connection to controller
-        # reader, writer = await asyncio.open_connection(controller_host, controller_port)
+        
         while self.running:
-            # TODO: Implement data fetch from reader then convert it into topic metadata
-            # Temp code to mimic fetching
-            meta = TopicMetaDataResponse(
-                topic='test-topic',
-                leader_id='1',
-                leader_addr='0.0.0.0',
-                leader_port=9092,
-                replica_list=['1','2','3'],
-                version=1
-            )
-            await self.__replica_manager.apply_metadata(meta)
-            await asyncio.sleep(5)
+            try:
+                reader, writer = await asyncio.open_connection(controller_host, controller_port)
+                
+                # Register self
+                reg_cmd = BrokerRegisterCommand(
+                    broker_id=self.__replica_manager.broker_id,
+                    host=self.config.broker.host,
+                    port=self.config.broker.port
+                )
+                frame = encode_command(reg_cmd)
+                writer.write(frame.header)
+                if frame.payload is not None:
+                    writer.write(frame.payload)
+                await writer.drain()
+                
+                heartbeat_task = asyncio.create_task(self._controller_heartbeat_loop(writer))
+
+                self.controller_connected = True
+                
+                try:
+                    while self.running:
+                        prefix = await reader.readexactly(PREFIX_SIZE)
+                        length = decode_length(prefix)
+                        data = await reader.readexactly(length)
+                        
+                        resp = parse_response(data)
+                        
+                        if isinstance(resp, TopicMetaDataListHeaderResponse):
+                            payload = await reader.readexactly(resp.payload_length)
+                            meta_list = parse_metadata_list_payload(payload)
+                            await self.__replica_manager.apply_metadata_list(
+                                TopicMetaDataListResponse(meta_list=meta_list)
+                            )
+                        elif isinstance(resp, TopicMetaDataResponse):
+                            await self.__replica_manager.apply_metadata(resp)
+                        elif isinstance(resp, ControllerPingResponse):
+                            pass
+                except (asyncio.IncompleteReadError, ConnectionResetError, asyncio.CancelledError):
+                    pass
+                finally:
+                    heartbeat_task.cancel()
+                    with contextlib.suppress(Exception):
+                        await heartbeat_task
+                    writer.close()
+                    with contextlib.suppress(Exception):
+                        await writer.wait_closed()
+                    
+                    self.controller_connected = False
+            except Exception:
+                pass
+            await asyncio.sleep(2.0)
+
+    async def _controller_heartbeat_loop(self, writer: asyncio.StreamWriter):
+        ping_cmd = ControllerPingCommand(broker_id=self.__replica_manager.broker_id)
+        frame = encode_command(ping_cmd)
+        while self.running:
+            await asyncio.sleep(3.0)
+            try:
+                writer.write(frame.header)
+                await writer.drain()
+            except Exception:
+                break
 
     async def handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
 

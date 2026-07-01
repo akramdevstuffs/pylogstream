@@ -56,3 +56,30 @@ class ReplicaFetchCommand(ReplicaCommand):
     offset: int
     size: int
     replica_id: str
+
+
+@dataclass
+class RegisterTopicCommand(Command):
+    topic: str
+
+
+@dataclass
+class MetadataRequestCommand(Command):
+    topic: str
+
+
+@dataclass
+class BrokerRegisterCommand(Command):
+    broker_id: str
+    host: str
+    port: int
+
+
+@dataclass
+class ControllerPingCommand(Command):
+    broker_id: str
+
+
+@dataclass
+class BrokerMetadataListCommand(Command):
+    broker_id: str

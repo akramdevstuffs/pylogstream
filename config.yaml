@@ -12,6 +12,10 @@ broker:
     max_batch_wait: 0.002
     max_workers: 4
 
+controller:
+  host: "127.0.0.1"
+  port: 9093
+
 log:
   log_dir: "./data/logs"
   retension_ms: 604800000        # 7 days

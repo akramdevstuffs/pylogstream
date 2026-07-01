@@ -70,9 +70,29 @@ def parse_command(data: bytes, checksum_enable=False):
     if cmd=='PNG':
         return PingCommand()
 
+    if cmd == 'RGT':
+        msg = data.decode()
+        parts = msg.split(" ", 1)
+        return RegisterTopicCommand(parts[1])
+
+    if cmd == 'MTR':
+        msg = data.decode()
+        parts = msg.split(" ", 1)
+        return MetadataRequestCommand(parts[1])
+
+    if cmd == 'BRK':
+        msg = data.decode()
+        parts = msg.split(" ", 3)
+        return BrokerRegisterCommand(parts[1], parts[2], int(parts[3]))
+
+    if cmd == 'CPG':
+        msg = data.decode()
+        parts = msg.split(" ", 1)
+        return ControllerPingCommand(parts[1])
+
     raise UnknownCommand(cmd)
 
-def parse_response(data: bytes):
+def parse_response(data: bytes) -> Response:
 
     msg = data.decode()
     cmd = msg[:3]
@@ -128,6 +148,23 @@ def parse_response(data: bytes):
         payload_len = int(parts[4])
         return ReplicaFetchHeaderResponse(topic, log_end_offset, high_watermark, payload_len)
 
+    if cmd == "CPR":
+        return ControllerPingResponse()
+
+    if cmd == "TMD":
+        parts = msg.split(" ", 6)
+        topic = parts[1]
+        leader_id = parts[2]
+        leader_addr = parts[3]
+        leader_port = int(parts[4])
+        replicas = parts[5].split(",") if parts[5] != "-" else []
+        version = int(parts[6])
+        return TopicMetaDataResponse(topic, leader_id, leader_addr, leader_port, replicas, version)
+
+    if cmd == "TML":
+        parts = msg.split(" ", 1)
+        return TopicMetaDataListHeaderResponse(int(parts[1]))
+
     raise UnknownCommand(cmd)
 
 def parse_records(payload: bytes):
@@ -158,3 +195,22 @@ def decode_record(record: bytes) -> tuple[int,str]:
 def checksum_verify(msg_bytes, checksum) -> bool:
     curr = zlib.crc32(msg_bytes)
     return curr == checksum
+
+
+def parse_metadata_list_payload(payload: bytes) -> list[TopicMetaDataResponse]:
+    if not payload:
+        return []
+    lines = payload.decode().split("\n")
+    meta_list = []
+    for line in lines:
+        if not line.strip():
+            continue
+        parts = line.split(" ")
+        topic = parts[0]
+        leader_id = parts[1]
+        leader_addr = parts[2]
+        leader_port = int(parts[3])
+        replicas = parts[4].split(",") if parts[4] != "-" else []
+        version = int(parts[5])
+        meta_list.append(TopicMetaDataResponse(topic, leader_id, leader_addr, leader_port, replicas, version))
+    return meta_list

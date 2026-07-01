@@ -122,6 +122,33 @@ def encode_response(resp):
             payload=payload
         )
 
+    if isinstance(resp, TopicMetaDataResponse):
+        replicas_str = ",".join(resp.replica_list) if resp.replica_list else "-"
+        header = f"TMD {resp.topic} {resp.leader_id} {resp.leader_addr} {resp.leader_port} {replicas_str} {resp.version}".encode()
+        return EncodedFrame(
+            header=encode_frame(header),
+            payload=None
+        )
+
+    if isinstance(resp, TopicMetaDataListResponse):
+        meta_lines = []
+        for meta in resp.meta_list:
+            replicas_str = ",".join(meta.replica_list) if meta.replica_list else "-"
+            meta_lines.append(f"{meta.topic} {meta.leader_id} {meta.leader_addr} {meta.leader_port} {replicas_str} {meta.version}")
+        payload_str = "\n".join(meta_lines)
+        header = f"TML {len(payload_str)}".encode()
+        return EncodedFrame(
+            header=encode_frame(header),
+            payload=payload_str.encode()
+        )
+
+    if isinstance(resp, ControllerPingResponse):
+        header = b"CPR"
+        return EncodedFrame(
+            header=encode_frame(header),
+            payload=None
+        )
+
     raise ValueError("Unknown response type")
 
 def encode_command(cmd: Command, checksum_enable: bool = True):
@@ -190,6 +217,34 @@ def encode_command(cmd: Command, checksum_enable: bool = True):
     
     if isinstance(cmd, ReplicaFetchCommand):
         header = f"RFH {cmd.replica_id} {cmd.topic} {cmd.offset} {cmd.size}".encode()
+        return EncodedFrame(
+            header=encode_frame(header),
+            payload=None
+        )
+
+    if isinstance(cmd, RegisterTopicCommand):
+        header = f"RGT {cmd.topic}".encode()
+        return EncodedFrame(
+            header=encode_frame(header),
+            payload=None
+        )
+
+    if isinstance(cmd, MetadataRequestCommand):
+        header = f"MTR {cmd.topic}".encode()
+        return EncodedFrame(
+            header=encode_frame(header),
+            payload=None
+        )
+
+    if isinstance(cmd, BrokerRegisterCommand):
+        header = f"BRK {cmd.broker_id} {cmd.host} {cmd.port}".encode()
+        return EncodedFrame(
+            header=encode_frame(header),
+            payload=None
+        )
+
+    if isinstance(cmd, ControllerPingCommand):
+        header = f"CPG {cmd.broker_id}".encode()
         return EncodedFrame(
             header=encode_frame(header),
             payload=None
