@@ -16,7 +16,8 @@ authors = [
 dependencies = [
     "pylogstream-protocol>=0.1.0",
     "uvloop; sys_platform != 'win32'",
-    "asyncio"
+    "asyncio",
+    "pyyaml"
 ]
 
 [project.optional-dependencies]

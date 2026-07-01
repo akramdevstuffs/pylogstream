@@ -35,7 +35,7 @@ jobs:
       - name: Install project packages
         run: |
           pip install -e protocol
-          pip install -e broker
+          pip install -e broker[dev]
           pip install -e controller
           pip install -e client
 
