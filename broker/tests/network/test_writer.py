@@ -76,7 +76,8 @@ async def test_writer_batching(writer: Writer):
     assert not fut1.done()
     assert not fut2.done()
     # Wait for batch to be processed
-    await asyncio.sleep(2*writer.config.max_batch_wait)
+    await asyncio.wait_for(fut1, timeout=2*writer.config.max_batch_wait+2)
+    await asyncio.wait_for(fut2, timeout=2*writer.config.max_batch_wait+2)
     assert fut1.done()
     assert fut2.done()
     assert fut1.result() == 0
