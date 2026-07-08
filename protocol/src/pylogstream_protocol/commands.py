@@ -57,29 +57,37 @@ class ReplicaFetchCommand(ReplicaCommand):
     size: int
     replica_id: str
 
+@dataclass
+class ControllerCommand(Command):
+    pass
 
 @dataclass
-class RegisterTopicCommand(Command):
+class RegisterTopicCommand(ControllerCommand):
     topic: str
 
 
 @dataclass
-class MetadataRequestCommand(Command):
+class MetadataRequestCommand(ControllerCommand):
     topic: str
 
 
 @dataclass
-class BrokerRegisterCommand(Command):
+class BrokerRegisterCommand(ControllerCommand):
     broker_id: str
     host: str
     port: int
 
 
 @dataclass
-class ControllerPingCommand(Command):
+class ControllerPingCommand(ControllerCommand):
     broker_id: str
 
 
 @dataclass
-class BrokerMetadataListCommand(Command):
+class BrokerMetadataListCommand(ControllerCommand):
     broker_id: str
+
+@dataclass
+class ISRChangeCommand(ControllerCommand):
+    topic: str
+    isr_list: list[str]

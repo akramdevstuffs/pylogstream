@@ -25,6 +25,14 @@ class MetastoreStorage:
 
     async def add_topic(self, topic: TopicMetadata) -> None:
         async with self._lock:
+            if topic.topic in self._topics:
+                raise ValueError(f"Topic {topic.topic} already exists")
+            self._topics[topic.topic] = topic
+    
+    async def update_topic(self, topic: TopicMetadata) -> None:
+        async with self._lock:
+            if topic.topic not in self._topics:
+                raise ValueError(f"Topic {topic.topic} does not exist")
             self._topics[topic.topic] = topic
 
     async def remove_topic(self, topic_name: str) -> TopicMetadata | None:

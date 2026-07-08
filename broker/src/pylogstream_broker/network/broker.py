@@ -19,6 +19,7 @@ from pylogstream_protocol.commands import (
     ReplicaFetchCommand,
     BrokerRegisterCommand,
     ControllerPingCommand,
+    ISRChangeCommand
 )
 from pylogstream_protocol.response import (
     Response,
@@ -86,8 +87,36 @@ class Broker:
                 if frame.payload is not None:
                     writer.write(frame.payload)
                 await writer.drain()
+
+                resp = await reader.readexactly(PREFIX_SIZE)
+                length = decode_length(resp)
+                data = await reader.readexactly(length)
+                resp = parse_response(data)
+                if not isinstance(resp, TopicMetaDataListHeaderResponse):
+                    writer.close()
+                    await writer.wait_closed()
+                    await asyncio.sleep(2.0)
+                    continue
+                # Fetch the metadata list payload
+                payload = await reader.readexactly(resp.payload_length)
+                meta_list = parse_metadata_list_payload(payload)
+                await self.__replica_manager.apply_metadata_list(TopicMetaDataListResponse(meta_list=meta_list))
                 
                 heartbeat_task = asyncio.create_task(self._controller_heartbeat_loop(writer))
+
+                # Subscribe to on_update_isr
+                async def on_isr_change(topic: str, isr_list: list[str]):
+                    isr_cmd = ISRChangeCommand(topic=topic, isr_list=isr_list)
+                    frame = encode_command(isr_cmd)
+                    try:
+                        writer.write(frame.header)
+                        if frame.payload is not None:
+                            writer.write(frame.payload)
+                        await writer.drain()
+                    except Exception:
+                        pass
+                
+                self.__replica_manager.on_isr_change = on_isr_change
 
                 self.controller_connected = True
                 
@@ -112,6 +141,7 @@ class Broker:
                 except (asyncio.IncompleteReadError, ConnectionResetError, asyncio.CancelledError):
                     pass
                 finally:
+                    self.__replica_manager.on_isr_change = None
                     heartbeat_task.cancel()
                     with contextlib.suppress(Exception):
                         await heartbeat_task

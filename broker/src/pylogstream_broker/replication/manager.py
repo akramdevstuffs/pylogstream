@@ -11,6 +11,8 @@ from pylogstream_protocol.response import (
 from enum import Enum
 from dataclasses import dataclass
 import asyncio
+from typing import Callable, Awaitable
+from collections import Counter
 
 
 class Role(Enum):
@@ -51,12 +53,14 @@ class ReplicaManager:
         self,
         log_manager: LogManager,
         config: ReplicaConfig,
+        on_isr_change: Callable[[str, list[str]], Awaitable[None]] | None = None
     ):
         self.config = config
         self.broker_id = self.config.id
 
         self.topics: dict[str, TopicState] = {}
         self.log_manager = log_manager
+        self.on_isr_change = on_isr_change
 
         self.update_isr_delay = self.config.max_isr_lag_ms / 2
 
@@ -223,7 +227,11 @@ class ReplicaManager:
     async def _leader_loop(self, state: TopicState):
         while state.running and state.role == Role.LEADER:
             assert state.leader is not None
+            old_isr = state.leader.in_sync_replica.copy()
             state.leader._update_isr()
+            if self.on_isr_change:
+                if Counter(old_isr) != Counter(state.leader.in_sync_replica):
+                    self.on_isr_change(state.topic, state.leader.in_sync_replica.copy())
             await asyncio.sleep(self.update_isr_delay)
 
     async def _follower_loop(self, state: TopicState):

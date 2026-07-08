@@ -1,9 +1,11 @@
+from collections import Counter
 import pytest
 import asyncio
 from pylogstream_controller.metastore.manager import ConsistentHashRing, MetastoreManager
 from pylogstream_controller.server import ControllerServer
 from pylogstream_protocol.commands import (
     BrokerRegisterCommand,
+    ISRChangeCommand,
     RegisterTopicCommand,
     MetadataRequestCommand,
     ControllerPingCommand
@@ -95,6 +97,7 @@ async def test_controller_server_integration():
 
         # Read the initial metadata list response
         init_resp = await read_until(reader1, TopicMetaDataListResponse)
+        assert isinstance(init_resp, TopicMetaDataListResponse)
         assert len(init_resp.meta_list) == 0
 
         # Register Broker 2
@@ -115,6 +118,7 @@ async def test_controller_server_integration():
 
         # Read Register topic response from Broker 1
         topic_resp = await read_until(reader1, TopicMetaDataResponse)
+        assert isinstance(topic_resp, TopicMetaDataResponse)
         assert topic_resp.topic == "test-topic"
         assert topic_resp.leader_id in {"b1", "b2"}
 
@@ -126,6 +130,7 @@ async def test_controller_server_integration():
         async def wait_for_failover():
             for _ in range(10):
                 broadcast_resp = await read_until(reader1, TopicMetaDataListResponse)
+                assert isinstance(broadcast_resp, TopicMetaDataListResponse)
                 if len(broadcast_resp.meta_list) == 1 and "b2" not in broadcast_resp.meta_list[0].replica_list:
                     return broadcast_resp
             raise AssertionError("b2 was not removed from replica list")
@@ -141,3 +146,40 @@ async def test_controller_server_integration():
     finally:
         await server.close()
 
+async def write_and_read_response(writer, reader, command):
+    frame = encode_command(command)
+    writer.write(frame.header)
+    await writer.drain()
+    prefix = await reader.readexactly(PREFIX_SIZE)
+    length = decode_length(prefix)
+    data = await reader.readexactly(length)
+    return parse_response(data)
+
+@pytest.mark.asyncio
+async def test_update_isr_command(controller_server: ControllerServer, controller_connection_factory):
+    streams =[]
+    for i in range(3):
+        reader, writer = await controller_connection_factory()
+        await write_and_read_response(writer, reader, BrokerRegisterCommand(broker_id=f"b{i+1}", host="127.0.0.1", port=9001 + i))
+        #keeping the connections open to simulate brokers being alive
+        streams.append((reader, writer))
+    
+    reader, writer = await controller_connection_factory()
+
+    resp = await write_and_read_response(writer, reader, RegisterTopicCommand(topic="isr-test-topic"))
+    assert isinstance(resp, TopicMetaDataResponse)
+    meta = await controller_server.manager.get_topic_metadata("isr-test-topic")
+    assert meta is not None
+    isr_list = meta.isr_list.copy()
+    frame = encode_command(ISRChangeCommand(topic="isr-test-topic", isr_list=isr_list))
+    writer.write(frame.header)
+    await writer.drain()
+    await asyncio.sleep(0.1)  # Allow some time for the server to process the ISR change
+    new_resp = await write_and_read_response(writer, reader, MetadataRequestCommand(topic="isr-test-topic"))
+
+    new_meta = await controller_server.manager.get_topic_metadata("isr-test-topic")
+    assert new_meta is not None
+
+    assert isinstance(new_resp, TopicMetaDataResponse)
+    assert Counter(new_meta.isr_list) == Counter(isr_list)
+    assert new_resp.version == resp.version + 1  # Version should have incremented

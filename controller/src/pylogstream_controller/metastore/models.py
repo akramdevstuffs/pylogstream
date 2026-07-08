@@ -11,4 +11,5 @@ class TopicMetadata:
     topic: str
     leader_id: str
     replica_list: list[str]
+    isr_list: list[str]
     version: int = 1

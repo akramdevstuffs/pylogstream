@@ -2,7 +2,7 @@ import pytest
 
 from pylogstream_protocol.parser import parse_command, parse_response
 from pylogstream_protocol.encoder import encode_command, encode_response
-from pylogstream_protocol.commands import PublishCommand, CommitOffsetCommand
+from pylogstream_protocol.commands import PublishCommand, CommitOffsetCommand, ISRChangeCommand
 from pylogstream_protocol.response import PubAckResponse, OffsetAckResponse
 
 
@@ -75,3 +75,10 @@ def test_invalid_acks_raise_value_error(bad):
             parse_command(bad.encode())
         else:
             parse_response(bad.encode())
+
+def test_isr_change_parse_and_response_roundtrip():
+    cmd = ISRChangeCommand(topic='topic3', isr_list=['node1', 'node2'])
+    parsed = round_trip_command(cmd, checksum_enable=False)
+    assert isinstance(parsed, ISRChangeCommand)
+    assert parsed.topic == 'topic3'
+    assert parsed.isr_list == ['node1', 'node2']

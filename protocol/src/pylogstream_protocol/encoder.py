@@ -249,5 +249,12 @@ def encode_command(cmd: Command, checksum_enable: bool = True):
             header=encode_frame(header),
             payload=None
         )
+    
+    if isinstance(cmd, ISRChangeCommand):
+        header = f"ISR {cmd.topic} {','.join(cmd.isr_list)}".encode()
+        return EncodedFrame(
+            header=encode_frame(header),
+            payload=None
+        )
 
     raise ValueError("Unknown command type")

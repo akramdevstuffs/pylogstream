@@ -106,7 +106,7 @@ class MetastoreManager:
             
             if needs_update:
                 topic_meta.version += 1
-                await self.storage.add_topic(topic_meta)
+                await self.storage.update_topic(topic_meta)
                 updated_topics.append(topic_meta)
                 
         return updated_topics
@@ -123,10 +123,20 @@ class MetastoreManager:
             topic=topic_name,
             leader_id=leader,
             replica_list=replicas,
+            isr_list=replicas.copy(),
             version=1
         )
         await self.storage.add_topic(meta)
         return meta
+    
+    async def update_topic_isr(self, topic_name: str, isr_list: list[str]) -> TopicMetadata | None:
+        topic_meta = await self.storage.get_topic(topic_name)
+        if topic_meta:
+            topic_meta.isr_list = isr_list
+            topic_meta.version += 1
+            await self.storage.update_topic(topic_meta)
+            return topic_meta
+        return None
 
     async def get_topic_metadata(self, topic_name: str) -> TopicMetadata | None:
         return await self.storage.get_topic(topic_name)

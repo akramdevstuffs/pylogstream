@@ -8,6 +8,7 @@ from pylogstream_protocol.commands import (
     MetadataRequestCommand,
     BrokerRegisterCommand,
     ControllerPingCommand,
+    ISRChangeCommand,
 )
 from pylogstream_protocol.response import (
     TopicMetaDataResponse,
@@ -167,13 +168,16 @@ class ControllerServer:
                             leader_addr=leader_addr,
                             leader_port=leader_port,
                             replica_list=topic_meta.replica_list,
-                            version=topic_meta.version
+                            version=topic_meta.version,
                         )
                     else:
                         resp = ErrorResponse(code=404, message=f"Topic {cmd.topic} not found")
                     frame = encode_response(resp)
                     writer.write(frame.header)
                     await writer.drain()
+                
+                elif isinstance(cmd, ISRChangeCommand):
+                    await self.manager.update_topic_isr(cmd.topic, cmd.isr_list)
                 else:
                     resp = ErrorResponse(code=400, message="Invalid command for controller")
                     frame = encode_response(resp)

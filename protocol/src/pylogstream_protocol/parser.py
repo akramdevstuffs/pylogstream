@@ -89,6 +89,13 @@ def parse_command(data: bytes, checksum_enable=False):
         msg = data.decode()
         parts = msg.split(" ", 1)
         return ControllerPingCommand(parts[1])
+    
+    if cmd=='ISR':
+        msg = data.decode()
+        parts = msg.split(" ", 2)
+        topic = parts[1]
+        isr = parts[2].split(",") if parts[2] != "-" else []
+        return ISRChangeCommand(topic, isr)
 
     raise UnknownCommand(cmd)
 
