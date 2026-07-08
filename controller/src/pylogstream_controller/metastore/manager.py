@@ -64,6 +64,20 @@ class MetastoreManager:
         self.ring = ConsistentHashRing()
         self.replicas_per_topic = replicas_per_topic
 
+    def _elect_leader(self, topic_meta: "TopicMetadata") -> str:
+        """Elect a leader for a topic using ISR-based selection.
+
+        Priority:
+          1. First broker in isr_list  (healthy, fully caught-up replicas)
+          2. First broker in replica_list (assigned replicas that may be lagging)
+          3. Hash-ring fallback          (any live broker)
+        """
+        if topic_meta.isr_list:
+            return topic_meta.isr_list[0]
+        if topic_meta.replica_list:
+            return topic_meta.replica_list[0]
+        return self.ring.get_node(topic_meta.topic) or ""
+
     async def register_broker(self, node_id: str, host: str, port: int) -> BrokerNode:
         node = BrokerNode(node_id=node_id, host=host, port=port)
         await self.storage.add_node(node)
@@ -97,11 +111,9 @@ class MetastoreManager:
                 needs_update = True
 
             if topic_meta.leader_id == node_id:
-                if topic_meta.replica_list:
-                    topic_meta.leader_id = topic_meta.replica_list[0]
-                else:
-                    leader = self.ring.get_node(topic_meta.topic)
-                    topic_meta.leader_id = leader if leader else ""
+                # Remove the failed node from ISR before electing a new leader
+                topic_meta.isr_list = [r for r in topic_meta.isr_list if r != node_id]
+                topic_meta.leader_id = self._elect_leader(topic_meta)
                 needs_update = True
             
             if needs_update:
@@ -133,6 +145,9 @@ class MetastoreManager:
         topic_meta = await self.storage.get_topic(topic_name)
         if topic_meta:
             topic_meta.isr_list = isr_list
+            # Re-elect a leader if the current leader is no longer in the ISR
+            if topic_meta.leader_id not in isr_list:
+                topic_meta.leader_id = self._elect_leader(topic_meta)
             topic_meta.version += 1
             await self.storage.update_topic(topic_meta)
             return topic_meta
