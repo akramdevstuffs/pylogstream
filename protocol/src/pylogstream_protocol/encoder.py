@@ -149,6 +149,13 @@ def encode_response(resp):
             payload=None
         )
 
+    if isinstance(resp, NotLeaderControllerResponse):
+        header = f"NLC {resp.leader_id} {resp.leader_host} {resp.leader_port}".encode()
+        return EncodedFrame(
+            header=encode_frame(header),
+            payload=None
+        )
+
     raise ValueError("Unknown response type")
 
 def encode_command(cmd: Command, checksum_enable: bool = True):

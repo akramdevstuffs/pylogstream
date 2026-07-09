@@ -172,6 +172,14 @@ def parse_response(data: bytes) -> Response:
         parts = msg.split(" ", 1)
         return TopicMetaDataListHeaderResponse(int(parts[1]))
 
+    if cmd == "NLC":
+        parts = msg.split(" ", 3)
+        return NotLeaderControllerResponse(
+            leader_id=parts[1],
+            leader_host=parts[2],
+            leader_port=int(parts[3]),
+        )
+
     raise UnknownCommand(cmd)
 
 def parse_records(payload: bytes):

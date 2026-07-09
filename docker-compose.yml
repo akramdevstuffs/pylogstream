@@ -1,0 +1,7 @@
+version: '1.0'
+
+services:
+  zookeeper:
+    image: zookeeper:3.9
+    ports:
+      - "2181:2181"

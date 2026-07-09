@@ -59,8 +59,8 @@ class ConsistentHashRing:
 
 
 class MetastoreManager:
-    def __init__(self, replicas_per_topic=3):
-        self.storage = MetastoreStorage()
+    def __init__(self, replicas_per_topic=3, storage=None):
+        self.storage = storage if storage is not None else MetastoreStorage()
         self.ring = ConsistentHashRing()
         self.replicas_per_topic = replicas_per_topic
 

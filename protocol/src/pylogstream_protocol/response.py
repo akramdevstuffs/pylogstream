@@ -110,3 +110,13 @@ class TopicMetaDataListResponse(ControllerResponse):
 @dataclass(frozen=True)
 class ControllerPingResponse(ControllerResponse):
     pass
+
+@dataclass(frozen=True)
+class NotLeaderControllerResponse(ControllerResponse):
+    """Sent to brokers when this controller is no longer the leader.
+
+    Fields carry the current leader's identity so clients can reconnect.
+    """
+    leader_id: str
+    leader_host: str
+    leader_port: int

@@ -1,3 +1,4 @@
+from pylogstream_protocol.response import NotLeaderControllerResponse
 from collections import Counter
 import pytest
 import asyncio
@@ -14,8 +15,7 @@ from pylogstream_protocol.response import (
     TopicMetaDataResponse,
     TopicMetaDataListHeaderResponse,
     TopicMetaDataListResponse,
-    ControllerPingResponse,
-    ErrorResponse
+    NotLeaderControllerResponse
 )
 from pylogstream_protocol.framer import PREFIX_SIZE, decode_length
 from pylogstream_protocol.encoder import encode_command
@@ -183,3 +183,111 @@ async def test_update_isr_command(controller_server: ControllerServer, controlle
     assert isinstance(new_resp, TopicMetaDataResponse)
     assert Counter(new_meta.isr_list) == Counter(isr_list)
     assert new_resp.version == resp.version + 1  # Version should have incremented
+
+
+@pytest.mark.asyncio
+async def test_controller_not_leader_rejection():
+    server = ControllerServer(host="127.0.0.1", port=19095, replicas_per_topic=2, heartbeat_timeout=2.0)
+    await server.start()
+
+    try:
+        # Simulate losing leadership
+        server.is_leader = False
+        
+        # Monkey patch get_leader to simulate another leader
+        async def mock_get_leader():
+            return {"controller_id": "other-leader", "host": "127.0.0.2", "port": 19096}
+        server.get_leader = mock_get_leader
+        
+        # Connect to the server
+        reader, writer = await asyncio.open_connection("127.0.0.1", 19095)
+        
+        # Send a ping command
+        ping_cmd = ControllerPingCommand(broker_id="b1")
+        frame = encode_command(ping_cmd)
+        writer.write(frame.header)
+        await writer.drain()
+        
+        # We should receive NotLeaderControllerResponse
+        prefix = await reader.readexactly(PREFIX_SIZE)
+        length = decode_length(prefix)
+        data = await reader.readexactly(length)
+        resp = parse_response(data)
+        
+        assert isinstance(resp, NotLeaderControllerResponse)
+        assert resp.leader_id == "other-leader"
+        assert resp.leader_host == "127.0.0.2"
+        assert resp.leader_port == 19096
+        
+        # Connection should be closed by server
+        try:
+            data = await reader.read(100)
+            assert len(data) == 0  # EOF
+        except ConnectionResetError:
+            pass # Also means connection is closed
+        
+    finally:
+        await server.close()
+
+@pytest.mark.asyncio
+async def test_controller_broadcast_not_leader():
+    server = ControllerServer(host="127.0.0.1", port=19096, replicas_per_topic=2, heartbeat_timeout=2.0)
+    await server.start()
+
+    try:
+        # Connect to the server while it's leader
+        reader, writer = await asyncio.open_connection("127.0.0.1", 19096)
+        reg_cmd = BrokerRegisterCommand(broker_id="b1", host="127.0.0.1", port=9001)
+        frame = encode_command(reg_cmd)
+        writer.write(frame.header)
+        await writer.drain()
+        
+        # read initial metadata
+        prefix = await reader.readexactly(PREFIX_SIZE)
+        length = decode_length(prefix)
+        data = await reader.readexactly(length)
+        resp = parse_response(data)
+        # Should be TML header
+        assert isinstance(resp, TopicMetaDataListHeaderResponse)
+        payload = await reader.readexactly(resp.payload_length)
+
+        # Broadcasted metadata is sent as well
+        prefix = await reader.readexactly(PREFIX_SIZE)
+        length = decode_length(prefix)
+        data = await reader.readexactly(length)
+        resp = parse_response(data)
+        assert isinstance(resp, TopicMetaDataListHeaderResponse)
+        payload = await reader.readexactly(resp.payload_length)
+        
+        # Now simulate losing leadership
+        server.is_leader = False
+        async def mock_get_leader():
+            return {"controller_id": "other-leader", "host": "127.0.0.2", "port": 19097}
+        server.get_leader = mock_get_leader
+        
+        # Broadcast
+        await server._broadcast_not_leader()
+        
+        # Broker should receive NotLeaderControllerResponse
+        prefix = await reader.readexactly(PREFIX_SIZE)
+        length = decode_length(prefix)
+        data = await reader.readexactly(length)
+        resp = parse_response(data)
+        
+        assert isinstance(resp, NotLeaderControllerResponse)
+        assert resp.leader_id == "other-leader"
+        assert resp.leader_host == "127.0.0.2"
+        assert resp.leader_port == 19097
+        
+        # Connection should be closed by server
+        try:
+            data = await reader.read(100)
+            assert len(data) == 0  # EOF
+        except ConnectionResetError:
+            pass # Also means connection is closed
+        
+        # Broker should be removed from active_brokers
+        assert len(server.active_brokers) == 0
+
+    finally:
+        await server.close()
