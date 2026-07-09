@@ -1,7 +1,7 @@
 import pytest
 
-from pylogstream_protocol.parser import parse_command, parse_response
-from pylogstream_protocol.encoder import encode_command, encode_response
+from pylogstream_protocol.parser import parse_command, parse_response, parse_packet_header
+from pylogstream_protocol.encoder import encode_command, encode_response, encode_packet_header
 from pylogstream_protocol.commands import PublishCommand, CommitOffsetCommand, ISRChangeCommand
 from pylogstream_protocol.response import PubAckResponse, OffsetAckResponse
 
@@ -20,6 +20,37 @@ def round_trip_response(resp):
     data = frame.header[PREFIX_SIZE:PREFIX_SIZE+decode_length(frame.header[:PREFIX_SIZE])]
     return parse_response(data)
 
+from pylogstream_protocol.common import Packet, PacketHeader
+
+def test_packet_header_roundtrip():
+    header = PacketHeader(correlation_id="12345")
+    msg = Packet()
+    msg.header = header
+    encoded_header = encode_packet_header(msg)
+    # Now parse the header back
+    parsed_header, rem = parse_packet_header(encoded_header + b'extra data')
+    assert isinstance(parsed_header, PacketHeader), "Parsed header is not of type PacketHeader"
+    assert parsed_header.correlation_id == "12345"
+    assert rem == b'extra data', "Remaining data after header parsing is incorrect"
+
+def test_optional_packet_header_roundtrip():
+    # Test with no header
+    packet = Packet()
+    encoded_header = encode_packet_header(packet)
+    # Now parse the header back
+    parsed_header, rem = parse_packet_header(encoded_header + b'extra data')
+    assert parsed_header is None, "Parsed header should be None when no header is present"
+    assert rem == b'extra data', "Remaining data after header parsing is incorrect"
+
+def test_positional_arguments_publish_command():
+    # Create a PublishCommand with positional arguments
+    cmd = PublishCommand('my_topic', b'my_payload', 1, False)
+    parsed = round_trip_command(cmd, checksum_enable=False)
+    assert isinstance(parsed, PublishCommand)
+    assert parsed.topic == 'my_topic'
+    assert parsed.payload == b'my_payload'
+    assert parsed.acks == 1
+    assert parsed.contains_checksum is False
 
 def test_publish_parse_valid_acks():
     # test acks 1

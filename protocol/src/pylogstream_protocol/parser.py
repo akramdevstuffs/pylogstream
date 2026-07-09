@@ -1,9 +1,39 @@
+from pylogstream_protocol.response import Response
+from pylogstream_protocol.common import PacketHeader
 from .commands import *
 from .response import *
 from .error import ChecksumFailed, UnknownCommand
 import zlib
+import re
+
+# TODO: Update regex when correlation_id format is finalized.
+_HEADER_RE = re.compile(r"^\[CRR=([^\]]+)\]\s*")
+
+
+def parse_packet_header(data: bytes) -> tuple[PacketHeader | None, bytes]:
+    """
+    Returns:
+        (header, remaining_packet_bytes)
+    """
+    text = data.decode()
+
+    match = _HEADER_RE.match(text)
+    if match is None:
+        return None, data
+
+    header = PacketHeader(correlation_id=str(match.group(1)))
+    remaining = text[match.end():].encode()
+
+    return header, remaining
 
 def parse_command(data: bytes, checksum_enable=False):
+    header, data = parse_packet_header(data)
+    cmd_obj:Command = _parse_command(data, checksum_enable)
+    if header is not None:
+        cmd_obj.header = header
+    return cmd_obj
+
+def _parse_command(data: bytes, checksum_enable=False):
 
     cmd = data[:3].decode()
 
@@ -100,6 +130,13 @@ def parse_command(data: bytes, checksum_enable=False):
     raise UnknownCommand(cmd)
 
 def parse_response(data: bytes) -> Response:
+    header, data = parse_packet_header(data)
+    resp_obj:Response = _parse_response(data)
+    if header is not None:
+        resp_obj.header = header
+    return resp_obj
+
+def _parse_response(data: bytes) -> Response:
 
     msg = data.decode()
     cmd = msg[:3]
