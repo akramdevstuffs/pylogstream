@@ -3,8 +3,16 @@ broker:
   port: 9092
   checksum_enable: true
   offset_topic: "__consumer_offset"
-  controller_host: "127.0.0.1"
-  controller_port: 9093
+  controllers:
+    - controller_id: "controller-1"
+      host: "127.0.0.1"
+      port: 9093
+    - controller_id: "controller-2"
+      host: "127.0.0.1"
+      port: 9094
+    - controller_id: "controller-3"
+      host: "127.0.0.1"
+      port: 9095
 
   writer_config:
     max_batch_size:  64
@@ -31,7 +39,7 @@ log:
   flush_service_interval: 2.0
 
 replica:
-  id: "1"
+  id: "replica1"
   fetch_size: 1048576
   pool_wait: 1
   min_isr_count: 1

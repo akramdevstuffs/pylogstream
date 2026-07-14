@@ -5,6 +5,7 @@ from pylogstream_protocol.framer import PREFIX_SIZE, decode_length
 from pylogstream_protocol.parser import parse_command
 from pylogstream_protocol.encoder import encode_response
 from pylogstream_protocol.commands import (
+    Command,
     RegisterTopicCommand,
     MetadataRequestCommand,
     BrokerRegisterCommand,
@@ -12,6 +13,7 @@ from pylogstream_protocol.commands import (
     ISRChangeCommand,
 )
 from pylogstream_protocol.response import (
+    Response,
     TopicMetaDataResponse,
     TopicMetaDataListResponse,
     ControllerPingResponse,
@@ -69,6 +71,7 @@ class ControllerServer:
         If the node already exists another controller is the leader; we watch
         for its deletion and re-run the election when it disappears.
         """
+        assert self._zk is not None, "ZK client must be initialized for leader election"
         async with self._election_lock:
             data = {
                 "controller_id": self.controller_id,
@@ -173,13 +176,13 @@ class ControllerServer:
         if broker_id in self.active_brokers:
             logger.info("Broker %s disconnected or heartbeat timed out", broker_id)
             writer = self.active_brokers[broker_id][0]
+            self.active_brokers.pop(broker_id, None)
             try:
                 writer.close()
                 await writer.wait_closed()
             except Exception:
-                pass
+                logger.warning("Error closing connection for broker %s", broker_id)
             await self.manager.deregister_broker(broker_id)
-            self.active_brokers.pop(broker_id, None)
             await self.broadcast_metadata()
 
     async def handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -191,14 +194,12 @@ class ControllerServer:
                 leader_host=leader.get("host", "") if leader else "",
                 leader_port=leader.get("port", 0) if leader else 0,
             )
-            frame = encode_response(resp)
             try:
-                writer.write(frame.header)
-                await writer.drain()
-                writer.close()
-                await writer.wait_closed()
+                await self._send_response(writer, resp)
             except Exception:
                 pass
+            writer.close()
+            await writer.wait_closed()
             return
 
         broker_id = None
@@ -232,11 +233,7 @@ class ControllerServer:
                             version=t.version,
                         ))
                     resp = TopicMetaDataListResponse(meta_list=meta_list)
-                    frame = encode_response(resp)
-                    writer.write(frame.header)
-                    if frame.payload is not None:
-                        writer.write(frame.payload)
-                    await writer.drain()
+                    await self._send_response(writer, resp, cmd)
                     await self.broadcast_metadata()
 
                 elif isinstance(cmd, ControllerPingCommand):
@@ -248,9 +245,7 @@ class ControllerServer:
                             self.active_brokers[broker_id][3],
                         )
                     resp = ControllerPingResponse()
-                    frame = encode_response(resp)
-                    writer.write(frame.header)
-                    await writer.drain()
+                    await self._send_response(writer, resp, cmd)
 
                 elif isinstance(cmd, RegisterTopicCommand):
                     logger.info("Register topic: %s", cmd.topic)
@@ -264,9 +259,7 @@ class ControllerServer:
                         replica_list=topic_meta.replica_list,
                         version=topic_meta.version,
                     )
-                    frame = encode_response(resp)
-                    writer.write(frame.header)
-                    await writer.drain()
+                    await self._send_response(writer, resp, cmd)
                     await self.broadcast_metadata()
 
                 elif isinstance(cmd, MetadataRequestCommand):
@@ -283,18 +276,14 @@ class ControllerServer:
                         )
                     else:
                         resp = ErrorResponse(code=404, message=f"Topic {cmd.topic} not found")
-                    frame = encode_response(resp)
-                    writer.write(frame.header)
-                    await writer.drain()
+                    await self._send_response(writer, resp, cmd)
 
                 elif isinstance(cmd, ISRChangeCommand):
                     await self.manager.update_topic_isr(cmd.topic, cmd.isr_list)
 
                 else:
                     resp = ErrorResponse(code=400, message="Invalid command for controller")
-                    frame = encode_response(resp)
-                    writer.write(frame.header)
-                    await writer.drain()
+                    await self._send_response(writer, resp, cmd)
 
         except Exception:
             traceback.print_exc()
@@ -304,6 +293,16 @@ class ControllerServer:
             else:
                 writer.close()
                 await writer.wait_closed()
+    
+    async def _send_response(self, writer: asyncio.StreamWriter, resp: Response, cmd: Command | None = None) -> None:
+        """Send a response to the broker, optionally echoing the command header."""
+        if cmd is not None:
+            resp.header = cmd.header
+        frame = encode_response(resp)
+        writer.write(frame.header)
+        if frame.payload is not None:
+            writer.write(frame.payload)
+        await writer.drain()
 
     # ------------------------------------------------------------------
     # Startup / shutdown

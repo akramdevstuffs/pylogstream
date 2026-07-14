@@ -21,11 +21,16 @@ class WriterConfig:
     max_workers: int = 4
 
 @dataclass(frozen=True)
+class ControllerAddress:
+    controller_id: str
+    host: str
+    port: int
+
+@dataclass(frozen=True)
 class BrokerConfig:
     host: str
     port: int
-    controller_host: str
-    controller_port: int
+    controller_list: list[ControllerAddress]
     checksum_enable: bool
     writer_config: WriterConfig
     offset_topic: str  = "__consumer_offset"
@@ -57,8 +62,7 @@ def load_config(path: str) -> Config:
             checksum_enable=broker_data["checksum_enable"],
             offset_topic=broker_data.get("offset_topic", "__consumer_offset"),
             writer_config=WriterConfig(**broker_data["writer_config"]),
-            controller_host=broker_data["controller_host"],
-            controller_port=broker_data["controller_port"]
+            controller_list=[ControllerAddress(**ctrl) for ctrl in broker_data.get("controllers", [])]
         ),
         log=LogConfig(**data["log"]),
         replica=ReplicaConfig(**data["replica"])

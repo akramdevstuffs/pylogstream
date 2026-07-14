@@ -42,6 +42,8 @@ from pylogstream_protocol.encoder import encode_response, encode_command, Encode
 from pylogstream_protocol.parser import parse_command, parse_metadata_list_payload 
 from pylogstream_broker.log.log_manager import LogManager
 from pylogstream_broker.replication.manager import ReplicaManager
+from pylogstream_broker.network.controller import ControllerConnection
+from pylogstream_protocol.commands import RegisterTopicCommand, MetadataRequestCommand
 from typing import Dict
 from collections import defaultdict
 import asyncio
@@ -52,118 +54,39 @@ import contextlib
 
 class Broker:
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, log_manager: LogManager|None = None, writer: Writer|None = None, replica_manager: ReplicaManager|None = None):
         self.config: Config = config
-        self.log_manager = LogManager(config.log)
-        self.writer = Writer(self.log_manager, self.config.broker.writer_config)
-        self.__client_heartbeats: Dict[str, float] = defaultdict(lambda:0.0)
-        self.__replica_manager: ReplicaManager = ReplicaManager(
+
+        self.log_manager = log_manager if log_manager is not None else LogManager(config.log)
+
+        self.writer = writer if writer is not None else Writer(self.log_manager, self.config.broker.writer_config)
+
+        self.__client_heartbeats: Dict[str, float] = defaultdict(float)
+
+        self._replica_manager = replica_manager if replica_manager is not None else ReplicaManager(
             log_manager=self.log_manager,
             config=self.config.replica
         )
+        self.__replica_manager = self._replica_manager
 
-        self.controller_connected: bool = False
+        self.controller: ControllerConnection|None = None
 
         self._client_tasks = set()
 
         self.running = False
+        self._ready: asyncio.Event = asyncio.Event()
     
-    async def _handle_controller(self):
-        controller_host = self.config.broker.controller_host
-        controller_port = self.config.broker.controller_port
-        
-        while self.running:
-            try:
-                reader, writer = await asyncio.open_connection(controller_host, controller_port)
-                
-                # Register self
-                reg_cmd = BrokerRegisterCommand(
-                    broker_id=self.__replica_manager.broker_id,
-                    host=self.config.broker.host,
-                    port=self.config.broker.port
-                )
-                frame = encode_command(reg_cmd)
-                writer.write(frame.header)
-                if frame.payload is not None:
-                    writer.write(frame.payload)
-                await writer.drain()
+    @property
+    def ready(self) -> bool:
+        return self._ready.is_set()
+    
+    async def wait_ready(self):
+        await self._ready.wait()
 
-                resp = await reader.readexactly(PREFIX_SIZE)
-                length = decode_length(resp)
-                data = await reader.readexactly(length)
-                resp = parse_response(data)
-                if not isinstance(resp, TopicMetaDataListHeaderResponse):
-                    writer.close()
-                    await writer.wait_closed()
-                    await asyncio.sleep(2.0)
-                    continue
-                # Fetch the metadata list payload
-                payload = await reader.readexactly(resp.payload_length)
-                meta_list = parse_metadata_list_payload(payload)
-                await self.__replica_manager.apply_metadata_list(TopicMetaDataListResponse(meta_list=meta_list))
-                
-                heartbeat_task = asyncio.create_task(self._controller_heartbeat_loop(writer))
+    @property
+    def controller_connected(self) -> bool:
+        return self.controller is not None and self.controller.connected
 
-                # Subscribe to on_update_isr
-                async def on_isr_change(topic: str, isr_list: list[str]):
-                    isr_cmd = ISRChangeCommand(topic=topic, isr_list=isr_list)
-                    frame = encode_command(isr_cmd)
-                    try:
-                        writer.write(frame.header)
-                        if frame.payload is not None:
-                            writer.write(frame.payload)
-                        await writer.drain()
-                    except Exception:
-                        pass
-                
-                self.__replica_manager.on_isr_change = on_isr_change
-
-                self.controller_connected = True
-                
-                try:
-                    while self.running:
-                        prefix = await reader.readexactly(PREFIX_SIZE)
-                        length = decode_length(prefix)
-                        data = await reader.readexactly(length)
-                        
-                        resp = parse_response(data)
-                        
-                        if isinstance(resp, TopicMetaDataListHeaderResponse):
-                            payload = await reader.readexactly(resp.payload_length)
-                            meta_list = parse_metadata_list_payload(payload)
-                            await self.__replica_manager.apply_metadata_list(
-                                TopicMetaDataListResponse(meta_list=meta_list)
-                            )
-                        elif isinstance(resp, TopicMetaDataResponse):
-                            await self.__replica_manager.apply_metadata(resp)
-                        elif isinstance(resp, ControllerPingResponse):
-                            pass
-                except (asyncio.IncompleteReadError, ConnectionResetError, asyncio.CancelledError):
-                    pass
-                finally:
-                    self.__replica_manager.on_isr_change = None
-                    heartbeat_task.cancel()
-                    with contextlib.suppress(Exception):
-                        await heartbeat_task
-                    writer.close()
-                    with contextlib.suppress(Exception):
-                        await writer.wait_closed()
-                    
-                    self.controller_connected = False
-            except Exception:
-                pass
-            await asyncio.sleep(2.0)
-
-    async def _controller_heartbeat_loop(self, writer: asyncio.StreamWriter):
-        ping_cmd = ControllerPingCommand(broker_id=self.__replica_manager.broker_id)
-        frame = encode_command(ping_cmd)
-        while self.running:
-            await asyncio.sleep(3.0)
-            try:
-                writer.write(frame.header)
-                await writer.drain()
-            except Exception:
-                break
 
     async def handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
 
@@ -211,6 +134,24 @@ class Broker:
                     # TODO: Implement error catching and give them to client
                     break
                 if resp is not None:
+                    await self._send_response(resp, writer)
+            elif isinstance(command, RegisterTopicCommand):
+                if self.controller:
+                    resp = await self.controller.register_topic(command.topic)
+                    if resp is None:
+                        resp = ErrorResponse(code=500, message="Failed to register topic")
+                    await self._send_response(resp, writer)
+                else:
+                    resp = ErrorResponse(code=500, message="Controller not connected")
+                    await self._send_response(resp, writer)
+            elif isinstance(command, MetadataRequestCommand):
+                if self.controller:
+                    resp = await self.controller.request_metadata(command.topic)
+                    if resp is None:
+                        resp = ErrorResponse(code=500, message="Failed to get metadata")
+                    await self._send_response(resp, writer)
+                else:
+                    resp = ErrorResponse(code=500, message="Controller not connected")
                     await self._send_response(resp, writer)
             elif isinstance(command, RegisterCommand):
                 client_id = str(uuid.uuid4())
@@ -371,10 +312,18 @@ class Broker:
 
         await writer.drain()
 
+    async def _create_controller_connection(self) -> ControllerConnection:
+        if not self.config.broker.controller_list:
+            raise ValueError("Controller list is empty")
+        return await ControllerConnection.connect(self.config.broker, self.__replica_manager)
+
     async def start_server(self):
 
         self.running = True
-        self.controller_task = asyncio.create_task(self._handle_controller())
+        if self.config.broker.controller_list:
+            self.controller = await self._create_controller_connection()
+        else:
+            print("No controller configured, running in standalone mode")
 
         self.server = await asyncio.start_server(
             self.handle_client,
@@ -386,6 +335,8 @@ class Broker:
         addrs = ', '.join(str(sock.getsockname()) for sock in self.server.sockets)
         print(f'Serving on {addrs}')
 
+        self._ready.set()
+
         try:
             await self.server.serve_forever()
         except asyncio.CancelledError:
@@ -394,9 +345,9 @@ class Broker:
     
     async def close(self) -> None:
         self.running = False
-        self.controller_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await self.controller_task
+        if self.controller:
+            await self.controller.close()
+            print('Controller connection closed')
 
         self.server.close()
 

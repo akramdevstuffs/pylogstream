@@ -33,8 +33,12 @@ class ErrorResponse(Response):
     code: int
     message: str
 
+class ResponseHeader(Response):
+    # A high level utility class for grouping all responses which requires more fetching
+    pass
+
 @dataclass(slots=True)
-class MessageResponseHeader(Response):
+class MessageResponseHeader(ResponseHeader):
     topic: str
     length: int
 
@@ -60,7 +64,7 @@ class ReplicaResponse(Response):
     pass
 
 @dataclass(slots=True)
-class ReplicaFetchHeaderResponse(ReplicaResponse):
+class ReplicaFetchHeaderResponse(ReplicaResponse, ResponseHeader):
     topic: str
     log_end_offset: int
     high_watermark: int
@@ -96,7 +100,7 @@ class TopicMetaDataResponse(ControllerResponse):
     state: str = "running"
 
 @dataclass(slots=True)
-class TopicMetaDataListHeaderResponse(ControllerResponse):
+class TopicMetaDataListHeaderResponse(ControllerResponse, ResponseHeader):
     payload_length: int
 
 

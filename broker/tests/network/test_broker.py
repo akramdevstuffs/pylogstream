@@ -28,58 +28,6 @@ from pylogstream_protocol.encoder import encode_command
 from pylogstream_protocol.parser import parse_response, parse_records, decode_record
 from pylogstream_broker.config import Config, BrokerConfig, WriterConfig, LogConfig, ReplicaConfig, load_config
 
-@pytest.fixture
-def config(tmp_path):
-    log_dir = tmp_path / "logs"
-    return Config(
-        broker=BrokerConfig(
-            host="127.0.0.1",
-            port=9092,
-            controller_host="localhost",
-            controller_port=9093,
-            checksum_enable=True,
-            writer_config=WriterConfig()
-        ),
-        log=LogConfig(
-            log_dir=log_dir,
-            retension_ms=7*24*3600*1000,
-            rollover_ms=24*3600*1000,
-            max_segment_size=1024*1024*10,
-            init_segment_size=1024*1024,
-            segment_size_inc=1024*1024
-        ),
-        replica=ReplicaConfig(id="replica1", min_isr_count=1)
-    )
-
-class TestBroker(Broker):
-    async def _handle_controller(self):
-        # Mock controller handler for testing
-        meta = TopicMetaDataResponse(
-            topic="test-topic",
-            leader_id='replica1',
-            leader_addr='0.0.0.0',
-            leader_port=9092,
-            replica_list=['replica1', 'replica2', 'replica3'],
-            version=1
-        )
-        await self._Broker__replica_manager.apply_metadata(meta) # type: ignore
-        
-        while self.running:
-            await asyncio.sleep(5)
-
-@pytest_asyncio.fixture
-async def broker(config):
-    broker = TestBroker(config)
-
-    task = asyncio.create_task(broker.start_server())
-    # TODO: Remove flaky test, add a more robust way to wait for the broker to be ready
-    await asyncio.sleep(1)
-
-    yield broker
-
-    await broker.close()
-    task.cancel()
-    await task
 
 @pytest.mark.asyncio
 async def test_broker_startup(broker):
@@ -93,11 +41,20 @@ async def test_broker_shutdown(broker):
 
 @pytest_asyncio.fixture
 async def client(broker):
-    reader, writer = await asyncio.open_connection(broker.config.broker.host, broker.config.broker.port)
+    exp = 0.1
+    while True:
+        try:
+            reader, writer = await asyncio.open_connection(broker.config.broker.host, broker.config.broker.port)
+            break
+        except Exception:
+            # Exponential backoff for connection attempts
+            exp *= 2
+            await asyncio.sleep(exp)
+            if exp > 5:
+                raise Exception("Failed to connect to broker after multiple attempts")
     yield (reader, writer)
     writer.close()
     await writer.wait_closed()
-
 @pytest.mark.asyncio
 async def test_broker_handle_client(client):
     reader, writer = client
@@ -155,6 +112,7 @@ async def push_message(writer: asyncio.StreamWriter, reader: asyncio.StreamReade
     resp = await read_response(reader)
     assert isinstance(resp, PubAckResponse)
     assert resp.acks == 1
+
 
 @pytest_asyncio.fixture
 async def registered_client(client):

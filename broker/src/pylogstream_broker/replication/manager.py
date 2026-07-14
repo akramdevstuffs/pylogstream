@@ -171,18 +171,20 @@ class ReplicaManager:
             state.loop_task = asyncio.create_task(self._leader_loop(state))
 
         else:
-            state.fetcher = await ReplicaFetcher.create(
-                topic=state.topic,
-                leader_addr=state.leader_addr,
-                leader_port=state.leader_port,
-                broker_id=self.broker_id,
-                fetch_size=self.config.fetch_size,
-                pool_wait=self.config.pool_wait,
-                log_manager=self.log_manager
-            )
+            try:
+                state.fetcher = await ReplicaFetcher.create(
+                    topic=state.topic,
+                    leader_addr=state.leader_addr,
+                    leader_port=state.leader_port,
+                    broker_id=self.broker_id,
+                    fetch_size=self.config.fetch_size,
+                    pool_wait=self.config.pool_wait,
+                    log_manager=self.log_manager
+                )
+                state.running = True
+            except Exception as e:
+                print(f"Error creating fetcher for topic {state.topic}: {e}")
 
-            state.running = True
-            state.loop_task = asyncio.create_task(self._follower_loop(state))
     
     async def _close_state(self, state: TopicState):
         state.running = False
@@ -233,11 +235,6 @@ class ReplicaManager:
                 if Counter(old_isr) != Counter(state.leader.in_sync_replica):
                     self.on_isr_change(state.topic, state.leader.in_sync_replica.copy())
             await asyncio.sleep(self.update_isr_delay)
-
-    async def _follower_loop(self, state: TopicState):
-        # placeholder loop (optional)
-        while state.running and state.role == Role.FOLLOWER:
-            await asyncio.sleep(1)
 
     # --------------------------
     # REQUEST HANDLING
